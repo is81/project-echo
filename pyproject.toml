@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "echo"
+version = "0.1.0"
+description = "回响计划 · Project Echo — 一个带有深度记忆、性格演化和叙事感的交互式存在体"
+requires-python = ">=3.10"
+dependencies = [
+    "sqlite-vec>=0.1.0",
+    "openai>=1.0.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+local = [
+    "llama-cpp-python>=0.2.0",
+]
+
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
