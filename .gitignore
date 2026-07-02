@@ -33,5 +33,6 @@ Thumbs.db
 
 # Project specific
 *.db
+*.db-shm
 *.db-journal
 *.db-wal
