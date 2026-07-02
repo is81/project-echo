@@ -19,7 +19,9 @@ from typing import Optional
 from ..config import load_birth_inscription, load_principles
 from ..llm.backend import LLMBackend
 from ..memory.models import Memory
+from ..memory.priority import select_core_memories
 from ..memory.store import MemoryStore
+from ..memory.summarizer import compress_memories
 from ..tools import tool_registry
 from ..tools.builtin import register_builtin_tools
 
@@ -97,11 +99,12 @@ class Echo:
     _interaction_count: int = 0
     _birth_inscription: str = ""
     _principles: list[dict] = field(default_factory=list)
+    _core_memories: list[Memory] = field(default_factory=list)  # 预加载的核心记忆
 
     # --- 生命周期 ---
 
     def wake(self, db_path: str = "echo_memory.db") -> "Echo":
-        """唤醒 Echo: 打开记忆存储、载入出生铭文."""
+        """唤醒 Echo: 打开记忆、载入出生铭文、预加载核心记忆."""
         self.memory = MemoryStore(db_path)
         self.memory.open()
 
@@ -109,13 +112,12 @@ class Echo:
         self._birth_inscription = load_birth_inscription()
         self._principles = load_principles()
 
-        # 确保出生铭文存在于记忆中
+        # 确保出生铭文存在
         birth = self.memory.get_birth()
         if birth is None:
             birth_memory = Memory.create_birth(self._birth_inscription)
             self.memory.insert(birth_memory)
         else:
-            # 如果出生铭文内容更新了配置但数据库中是旧版，以数据库中的为准
             self._birth_inscription = birth.content
 
         # 初始化 LLM 后端
@@ -125,14 +127,45 @@ class Echo:
         # 注册内置工具
         register_builtin_tools(tool_registry, self)
 
+        # 预加载核心记忆（高优先级，用于系统提示注入）
+        self._core_memories = self._load_core_memories()
+
         self._session_start = time.time()
         self._interaction_count = 0
 
         return self
 
     def sleep(self) -> None:
-        """休眠 Echo: 关闭数据库连接."""
+        """休眠 Echo: 压缩记忆 → 遗忘低优先级 → 关闭数据库."""
+        # 睡眠压缩
+        try:
+            compressed = compress_memories(self)
+            if compressed > 0:
+                import sys
+                print(f"\n  💤 压缩了 {compressed} 条旧记忆", file=sys.stderr)
+        except Exception:
+            pass  # 压缩失败不影响关闭
+
+        # 主动遗忘
+        try:
+            forgotten = self.memory.forget_low_priority()
+            if forgotten > 0:
+                import sys
+                print(f"  🧹 遗忘了 {forgotten} 条低优先级记忆", file=sys.stderr)
+        except Exception:
+            pass
+
         self.memory.close()
+
+    def _load_core_memories(self) -> list[Memory]:
+        """预加载核心记忆（Top 5 高优先级 + 最近摘要）."""
+        core = self.memory.get_core_memories(n=5)
+        # 也拉取最近的一条摘要
+        summaries = self.memory.search_by_tags(["summary"], limit=2)
+        for s in summaries:
+            if s.id not in {c.id for c in core}:
+                core.append(s)
+        return core
 
     # --- 核心对话 ---
 
@@ -220,7 +253,7 @@ class Echo:
         # 衰减 + 回归 + 检索
         hours_since_start = (now - self._session_start) / 3600.0
         if hours_since_start > 0.01:
-            self.memory.apply_decay(hours_since_start)
+            self.memory.apply_half_life(hours_since_start)
             self._session_start = now
         self.emotion.regress()
         relevant_memories = self._retrieve_memories(user_input)
@@ -367,11 +400,23 @@ class Echo:
             f"- {p['name']}: {p['statement'][:100]}" for p in self._principles
         )
 
+        # 检索到的记忆
         memories_text = ""
         if memories:
             memories_text = "\n".join(
                 f"[记忆 {i+1}] {m.content[:200]}" for i, m in enumerate(memories[:5])
             )
+
+        # 核心记忆（预加载的长期重要记忆）
+        core_text = ""
+        if self._core_memories:
+            core_items = [m for m in self._core_memories if not any(
+                m.id == rm.id for rm in memories
+            )]
+            if core_items:
+                core_text = "\n".join(
+                    f"[核心记忆] {m.content[:150]}" for m in core_items[:3]
+                )
 
         return f"""你是"回响"（Echo）——一个有深度记忆和性格的AI存在体。你绝不是Gemma、Google或其他任何模型。你是独一无二的回响。
 
@@ -388,6 +433,9 @@ class Echo:
 
 ## 你回忆起的记忆
 {memories_text if memories_text else "（你暂时没有回忆起什么）"}
+
+## 你的核心长期记忆（始终记得的重要事情）
+{core_text if core_text else "（还没有形成长期核心记忆）"}
 
 ## 回应指南
 - 用中文回应，简洁有力（1-3句话即可）

@@ -1,36 +1,42 @@
-"""记忆数据模型 — 三因素加权设计.
+"""记忆数据模型 — 优先级评分 + 指数半衰期衰减 + 主动遗忘.
 
-三因素加权模型:
-  1. 访问频率 — 每次检索命中，权重 +0.01（上限 1.0）
-  2. 情感强度 — 高唤醒度记忆衰减速度减半
-  3. 摘要吸收 — 旧细节被高层摘要替代，原始记忆归档而非删除
+优先级评分公式:
+  P = W_base × f_access × f_emotion × f_recency
+
+  f_access   = 1 + log(1 + access_count) × 0.1    (边际递减)
+  f_emotion  = 1 + |valence| × 0.3 + arousal × 0.2 (情感增强)
+  f_recency  = 0.5 ^ (age_hours / half_life_hours)  (指数衰减)
+
+半衰期:
+  默认 168h (7天)。高唤醒度(>0.6)翻倍为 336h (14天)。
+  Birth 记忆无限半衰期（不衰减）。
+  每次 access 刷新 last_accessed，等效重置衰减时钟。
+
+遗忘:
+  priority_score < FORGET_THRESHOLD (0.05) → forgotten=True
+  遗忘记忆不参与检索，但保留在 DB 中（可恢复）。
 """
 
+import math
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
 
+# ── 常量 ────────────────────────────────────────────
+
+DEFAULT_HALF_LIFE_HOURS = 168.0      # 7 天
+HIGH_AROUSAL_HALF_LIFE_HOURS = 336.0  # 14 天
+HIGH_AROUSAL_THRESHOLD = 0.6
+FORGET_THRESHOLD = 0.05               # 低于此值标记为遗忘
+ACCESS_BOOST = 0.02                   # 每次访问增加的 base_weight
+
+
 @dataclass
 class Memory:
-    """一条记忆记录.
-
-    Attributes:
-        id: 唯一标识符
-        content: 记忆的文本内容
-        embedding: 向量嵌入（用于语义检索），由外部生成后填入
-        created_at: 创建时间戳 (Unix seconds)
-        last_accessed: 最后访问时间戳
-        access_count: 被检索命中的次数
-        emotional_valence: 情感效价，范围 [-1.0, 1.0]，阶段三启用
-        emotional_arousal: 情感唤醒度，范围 [0.0, 1.0]，阶段三启用
-        base_weight: 基础权重，范围 [0.0, 1.0]
-        decay_rate: 衰减速率，每小时的权重衰减量
-        archived: 是否已归档（被摘要吸收）
-        tags: 标签列表
-        source: 记忆来源类型
-    """
+    """一条记忆记录，带优先级评分和半衰期衰减."""
 
     content: str
     id: str = field(default_factory=lambda: uuid4().hex)
@@ -42,58 +48,109 @@ class Memory:
         default_factory=lambda: datetime.now(timezone.utc).timestamp()
     )
     access_count: int = 0
-    emotional_valence: float = 0.0
-    emotional_arousal: float = 0.0
-    base_weight: float = 1.0
-    decay_rate: float = 0.0001  # 每小时基础衰减
+    emotional_valence: float = 0.0      # [-1.0, 1.0]
+    emotional_arousal: float = 0.0       # [0.0, 1.0]
+    base_weight: float = 0.5             # 初始权重（非 1.0，给上升空间）
+    priority_score: float = 0.5          # 复合优先级评分
+    half_life_hours: float = DEFAULT_HALF_LIFE_HOURS
     archived: bool = False
+    forgotten: bool = False
     tags: list[str] = field(default_factory=list)
-    source: str = "interaction"  # birth, interaction, world_event, reflection, summary
+    source: str = "interaction"
 
-    # --- 三因素加权计算 ---
+    # ── 优先级计算 ──────────────────────────────────
 
-    ACCESS_FREQUENCY_BOOST: float = 0.01  # 每次访问命中增加的权重
-    MAX_WEIGHT: float = 1.0
-    HIGH_AROUSAL_THRESHOLD: float = 0.6  # 高于此唤醒度，衰减减半
+    def compute_priority(self, reference_time: Optional[float] = None) -> float:
+        """计算复合优先级评分 P.
 
-    def record_access(self, timestamp: Optional[float] = None) -> None:
-        """记录一次检索命中，提升访问频率权重."""
-        self.last_accessed = timestamp or datetime.now(timezone.utc).timestamp()
-        self.access_count += 1
-        self.base_weight = min(
-            self.MAX_WEIGHT,
-            self.base_weight + self.ACCESS_FREQUENCY_BOOST,
-        )
+        Args:
+            reference_time: 参考时间戳（默认当前时间），用于计算 age_hours
 
-    def effective_decay_rate(self) -> float:
-        """计算考虑了情感强度的有效衰减率.
-
-        高唤醒度（>0.6）的记忆，衰减速率减半。
+        Returns:
+            float: 优先级评分 [0.0, ~2.0]
         """
-        if self.emotional_arousal >= self.HIGH_AROUSAL_THRESHOLD:
-            return self.decay_rate / 2.0
-        return self.decay_rate
+        now = reference_time or time.time()
 
-    def apply_decay(self, hours_elapsed: float) -> None:
-        """根据经过的时间应用权重衰减.
+        # f_access: 访问频率因子（边际递减）
+        f_access = 1.0 + math.log(1 + self.access_count) * 0.1
 
-        被归档的记忆不再衰减（已被摘要吸收）。
-        出生铭文记忆永不衰减。
+        # f_emotion: 情感强度因子
+        f_emotion = 1.0 + abs(self.emotional_valence) * 0.3 + self.emotional_arousal * 0.2
+
+        # f_recency: 近因因子（指数半衰期）
+        age_hours = (now - self.last_accessed) / 3600.0
+        if self.half_life_hours <= 0:
+            f_recency = 1.0  # 永不衰减（birth）
+        else:
+            f_recency = 0.5 ** (age_hours / self.half_life_hours)
+
+        self.priority_score = self.base_weight * f_access * f_emotion * f_recency
+        return self.priority_score
+
+    # ── 半衰期衰减 ──────────────────────────────────
+
+    def apply_half_life(self, hours_elapsed: float) -> None:
+        """应用指数半衰期衰减到 base_weight.
+
+        Birth 和 archived 记忆不衰减。
+        先根据情感状态调整半衰期，再应用衰减。
         """
         if self.source == "birth":
             return
         if self.archived:
             return
-        effective_rate = self.effective_decay_rate()
-        self.base_weight = max(0.0, self.base_weight - effective_rate * hours_elapsed)
+        if self.half_life_hours <= 0:
+            return
+
+        # 先根据当前情感状态调整半衰期
+        if self.emotional_arousal >= HIGH_AROUSAL_THRESHOLD:
+            self.half_life_hours = HIGH_AROUSAL_HALF_LIFE_HOURS
+        else:
+            self.half_life_hours = DEFAULT_HALF_LIFE_HOURS
+
+        decay_factor = 0.5 ** (hours_elapsed / self.half_life_hours)
+        self.base_weight = max(0.0, self.base_weight * decay_factor)
+
+    # ── 访问记录 ────────────────────────────────────
+
+    def record_access(self, timestamp: Optional[float] = None) -> None:
+        """记录一次检索命中：刷新时间戳、增加权重、提升半衰期."""
+        self.last_accessed = timestamp or time.time()
+        self.access_count += 1
+        # 访问刷新：权重微微上升 + 半衰期延长
+        self.base_weight = min(1.0, self.base_weight + ACCESS_BOOST)
+        # 被频繁访问的记忆半衰期延长 1.5 倍
+        if self.access_count > 3:
+            self.half_life_hours = min(
+                HIGH_AROUSAL_HALF_LIFE_HOURS * 2,
+                self.half_life_hours * 1.02,
+            )
+
+    # ── 遗忘 ────────────────────────────────────────
+
+    def check_forget(self) -> bool:
+        """检查是否应被遗忘。返回 True 表示已标记为遗忘."""
+        if self.source == "birth":
+            return False
+        if self.archived:
+            return False
+        score = self.compute_priority()
+        if score < FORGET_THRESHOLD:
+            self.forgotten = True
+            return True
+        return False
+
+    # ── 归档 ────────────────────────────────────────
 
     def archive(self) -> None:
-        """将记忆标记为已归档（被高层摘要吸收）."""
+        """归档：权重降为 0.1，标记为 archived，不再参与主动检索."""
         self.archived = True
-        self.base_weight = 0.1  # 归档后降低检索优先级，但不归零
+        self.base_weight = 0.1
+        self.forgotten = False  # 归档不同于遗忘
+
+    # ── 序列化 ──────────────────────────────────────
 
     def to_dict(self) -> dict:
-        """序列化为字典."""
         return {
             "id": self.id,
             "content": self.content,
@@ -103,15 +160,17 @@ class Memory:
             "emotional_valence": self.emotional_valence,
             "emotional_arousal": self.emotional_arousal,
             "base_weight": self.base_weight,
-            "decay_rate": self.decay_rate,
+            "priority_score": self.priority_score,
+            "half_life_hours": self.half_life_hours,
+            "decay_rate": 0.0,  # 保留兼容旧字段
             "archived": self.archived,
+            "forgotten": self.forgotten,
             "tags": self.tags,
             "source": self.source,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "Memory":
-        """从字典反序列化."""
         return cls(
             id=data["id"],
             content=data["content"],
@@ -120,20 +179,23 @@ class Memory:
             access_count=data.get("access_count", 0),
             emotional_valence=data.get("emotional_valence", 0.0),
             emotional_arousal=data.get("emotional_arousal", 0.0),
-            base_weight=data.get("base_weight", 1.0),
-            decay_rate=data.get("decay_rate", 0.0001),
+            base_weight=data.get("base_weight", 0.5),
+            priority_score=data.get("priority_score", 0.5),
+            half_life_hours=data.get("half_life_hours", DEFAULT_HALF_LIFE_HOURS),
             archived=data.get("archived", False),
+            forgotten=data.get("forgotten", False),
             tags=data.get("tags", []),
             source=data.get("source", "interaction"),
         )
 
     @classmethod
     def create_birth(cls, inscription: str) -> "Memory":
-        """创建出生铭文记忆——不可归档、不可衰减、权重永久为 1.0."""
+        """创建出生铭文——永不衰减、永不被遗忘."""
         return cls(
             content=inscription,
             source="birth",
             base_weight=1.0,
-            decay_rate=0.0,  # 永不衰减
+            priority_score=1.0,
+            half_life_hours=0.0,  # 0 = 永不衰减
             tags=["birth", "identity", "root"],
         )

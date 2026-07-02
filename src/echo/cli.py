@@ -172,14 +172,14 @@ def _memories_table(echo: Echo) -> Table:
     table = Table(box=box.ROUNDED, border_style=C_DIM, show_header=True,
                   title=f"记忆浏览（共 {count} 条）", title_style="bold yellow")
     table.add_column("来源", style=C_DIM, width=12)
-    table.add_column("内容", style="white", max_width=55)
-    table.add_column("权重", style="bright_cyan", width=8)
+    table.add_column("内容", style="white", max_width=50)
+    table.add_column("优先级", style="bright_cyan", width=8)
 
     if birth:
         table.add_row(
             Text("🏠 出生铭文", style=C_BIRTH),
             Text(birth.content, style=C_BIRTH),
-            Text("1.00", style="green"),
+            Text("∞", style="green"),
         )
 
     for m in active:
@@ -187,10 +187,19 @@ def _memories_table(echo: Echo) -> Table:
             continue
         src_icon = {"interaction": "💬", "reflection": "🪞", "world_event": "🌍",
                     "summary": "📝"}.get(m.source, "❓")
+        # 优先级颜色
+        if m.priority_score >= 0.6:
+            p_style = "green"
+        elif m.priority_score >= 0.3:
+            p_style = "yellow"
+        elif m.priority_score >= 0.1:
+            p_style = "dim"
+        else:
+            p_style = "red"
         table.add_row(
             f"{src_icon} {m.source}",
-            m.content[:55] + ("..." if len(m.content) > 55 else ""),
-            f"{m.base_weight:.2f}",
+            m.content[:50] + ("..." if len(m.content) > 50 else ""),
+            Text(f"{m.priority_score:.2f}", style=p_style),
         )
     return table
 
@@ -269,7 +278,7 @@ def main():
     except EOFError:
         pass
     finally:
-        console.print("[dim]回响休眠中...[/]")
+        console.print("[dim]回响正在整理记忆...[/]")
         echo.sleep()
         console.print("[dim]已退出。[/]")
 
