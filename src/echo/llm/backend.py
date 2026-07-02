@@ -26,6 +26,7 @@ class LLMResponse:
     model_used: str  # "local" | "api" | "none"
     tokens_used: int = 0
     finish_reason: str = "stop"
+    tool_calls: list[dict] | None = None  # [{"name": ..., "arguments": {...}}, ...]
 
 
 class LLMBackend:
@@ -213,6 +214,84 @@ class LLMBackend:
             api_key=self.api_key,
             model=self.api_model,
         )
+
+    # --- 工具调用 ---
+
+    def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float = 0.8,
+        max_tokens: int = 256,
+    ) -> LLMResponse:
+        """生成回应，支持工具调用。非流式。
+
+        Args:
+            messages: [{"role": "system"/"user"/"assistant"/"tool", "content": ...}, ...]
+            tools: OpenAI 兼容的工具定义列表
+            temperature: 采样温度
+            max_tokens: 最大 token 数
+
+        Returns:
+            LLMResponse，如果模型选择调用工具，tool_calls 字段非空。
+        """
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(
+                api_key="not-needed",
+                base_url=self.llama_server_url,
+                timeout=120.0,
+            )
+
+            response = client.chat.completions.create(
+                model="local-model",
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                extra_body={"enable_thinking": False},
+            )
+
+            choice = response.choices[0]
+            msg = choice.message
+
+            # 检查是否有工具调用
+            if msg.tool_calls:
+                tool_calls = []
+                for tc in msg.tool_calls:
+                    import json
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    tool_calls.append({
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "arguments": args,
+                    })
+                return LLMResponse(
+                    text="",
+                    model_used="local",
+                    finish_reason="tool_calls",
+                    tool_calls=tool_calls,
+                )
+
+            # 普通文本回应
+            return LLMResponse(
+                text=msg.content or "",
+                model_used="local",
+                tokens_used=response.usage.total_tokens if response.usage else 0,
+                finish_reason=choice.finish_reason or "stop",
+            )
+        except Exception as e:
+            # Fallback: 不带 tools 的普通调用
+            return self.generate(
+                prompt=messages[-1]["content"] if messages else "",
+                system_prompt=next((m["content"] for m in messages if m["role"] == "system"), ""),
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
 
     # --- 公共接口 ---
 

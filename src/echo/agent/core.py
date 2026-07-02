@@ -8,6 +8,7 @@
   - 情感状态用二维向量（愉悦度/唤醒度）模拟，随交互动态更新
 """
 
+import json
 import random
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ from ..config import load_birth_inscription, load_principles
 from ..llm.backend import LLMBackend
 from ..memory.models import Memory
 from ..memory.store import MemoryStore
+from ..tools import tool_registry
+from ..tools.builtin import register_builtin_tools
 
 
 @dataclass
@@ -119,6 +122,9 @@ class Echo:
         if self.llm is None:
             self.llm = LLMBackend()
 
+        # 注册内置工具
+        register_builtin_tools(tool_registry, self)
+
         self._session_start = time.time()
         self._interaction_count = 0
 
@@ -200,14 +206,18 @@ class Echo:
         }
 
     def respond_stream(self, user_input: str) -> Iterator[str]:
-        """流式回应 — 逐 token yield，用于 CLI 实时显示.
+        """流式回应，支持工具调用.
 
-        在全部 token 输出后，yield 一个包含元数据的特殊结束标记。
+        流程:
+          1. 检索记忆 + 构建系统提示
+          2. 非流式 LLM 调用（带 tools 定义）
+          3. 如果模型选择调用工具 → 执行 → 结果注入 → 回到步骤 2（最多 3 轮）
+          4. 最终文本流式输出
         """
         self._interaction_count += 1
         now = datetime.now(timezone.utc).timestamp()
 
-        # 1-3. 衰减、回归、检索（同 respond）
+        # 衰减 + 回归 + 检索
         hours_since_start = (now - self._session_start) / 3600.0
         if hours_since_start > 0.01:
             self.memory.apply_decay(hours_since_start)
@@ -217,36 +227,100 @@ class Echo:
         system_prompt = self._build_system_prompt(relevant_memories)
         temperature = self._compute_temperature()
 
-        # 4. 流式生成
-        token_iter, model_used = self.llm.stream(
-            prompt=user_input,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            max_tokens=200,
-        )
+        # 构建消息列表（用于工具调用上下文）
+        messages = [{"role": "system", "content": system_prompt}]
+        # 包含最近对话历史（让模型在工具循环中有上下文）
+        for h in self._history[-6:]:
+            role = "assistant" if h["role"] == "echo" else h["role"]
+            messages.append({"role": role, "content": h["content"]})
+        messages.append({"role": "user", "content": user_input})
 
-        full_text = ""
-        for token in token_iter:
-            full_text += token
-            yield token
+        tools = tool_registry.to_openai_tools()
 
-        # 5. 后处理
+        # ── 工具调用循环 ──
+        MAX_TOOL_ROUNDS = 3
+        tool_calls_made: list[str] = []
+        final_text = ""
+
+        for _round in range(MAX_TOOL_ROUNDS):
+            response = self.llm.generate_with_tools(
+                messages=messages,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=200,
+            )
+
+            # 模型决定调用工具
+            if response.tool_calls:
+                # 添加 assistant 消息（含 tool_calls）
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
+                            },
+                        }
+                        for tc in response.tool_calls
+                    ],
+                }
+                messages.append(assistant_msg)
+
+                for tc in response.tool_calls:
+                    tool_name = tc["name"]
+                    tool_args = tc["arguments"]
+                    tool_calls_made.append(tool_name)
+
+                    yield f"\n  🔧 {tool_name}\n"
+
+                    # 执行工具
+                    result = tool_registry.execute(tool_name, tool_args)
+                    # 截断过长结果
+                    if len(result) > 500:
+                        result = result[:500] + "..."
+
+                    # 添加工具结果消息
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result,
+                    })
+
+                continue  # 下一轮 LLM 调用
+
+            # 模型返回纯文本
+            final_text = response.text
+            break
+
+        # 如果循环结束仍无文本（兜底）
+        if not final_text:
+            final_text = "（我想了想，但不知道该怎么回应。）"
+
+        # 流式输出最终文本
+        for char in final_text:
+            yield char
+
+        # 后处理
+        tool_info = f" [工具: {', '.join(tool_calls_made)}]" if tool_calls_made else ""
         interaction_memory = Memory(
-            content=f"用户: {user_input}\n回响: {full_text}",
+            content=f"用户: {user_input}\n回响: {final_text}{tool_info}",
             source="interaction",
             tags=["conversation"],
             emotional_valence=self.emotion.valence,
             emotional_arousal=self.emotion.arousal,
         )
         self.memory.insert(interaction_memory)
-        self._update_emotion(user_input, full_text)
+        self._update_emotion(user_input, final_text)
         self._history.append({"role": "user", "content": user_input})
-        self._history.append({"role": "echo", "content": full_text})
+        self._history.append({"role": "echo", "content": final_text})
         if len(self._history) > 50:
             self._history = self._history[-50:]
 
-        # 最后 yield 元数据
-        yield f"\n  [{self.emotion.mood_label} · {model_used} · t={temperature:.2f} · 记忆×{len(relevant_memories)}]"
+        yield f"\n  [{self.emotion.mood_label} · t={temperature:.2f} · 记忆×{len(relevant_memories)}{tool_info}]"
 
     # --- 记忆检索 ---
 
