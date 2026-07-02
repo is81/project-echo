@@ -221,6 +221,7 @@ def main():
                 continue
 
             # 对话
+            console.print()  # 空行
             full_text = ""; tools = []
             for token in echo.respond_stream(user_input):
                 if token.startswith("\n  🔧"):
