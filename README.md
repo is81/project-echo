@@ -47,6 +47,10 @@ Project Echo/
 ## 快速开始
 
 ```bash
+# 1. 启动 llama-server（Gemma 4 12B QAT + 禁用推理加速）
+llama-server -m <模型路径> --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --reasoning off
+
+# 2. 启动回响
 pip install -e .
 python -m echo.cli
 ```
@@ -54,6 +58,6 @@ python -m echo.cli
 ## 技术栈
 
 - Python 3.10+
-- Qwen2.5-7B (Q4_K_M) 本地模型，带 API fallback
+- Gemma 4 12B QAT (Q4_K_XL) via llama-server（流式，禁用 reasoning）
 - SQLite + sqlite-vec（向量记忆存储）
 - 记忆三因素加权模型（访问频率 × 情感强度 × 摘要吸收）

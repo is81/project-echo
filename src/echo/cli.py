@@ -109,9 +109,12 @@ def main():
                     print(f"未知命令: {cmd_name}。输入 /help 查看可用命令。")
                 continue
 
-            # 对话
-            response = echo.respond(user_input)
-            print(f"\n回响 [{response['mood']}]: {response['text']}")
+            # 对话（流式）
+            import sys
+            print(f"\n回响: ", end="", flush=True)
+            for token in echo.respond_stream(user_input):
+                print(token, end="", flush=True)
+            print()  # 换行
 
     except KeyboardInterrupt:
         print("\n\n收到中断信号...")

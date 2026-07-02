@@ -12,6 +12,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections.abc import Iterator
 from typing import Optional
 
 from ..config import load_birth_inscription, load_principles
@@ -198,6 +199,55 @@ class Echo:
             "emotion": self.emotion.to_dict(),
         }
 
+    def respond_stream(self, user_input: str) -> Iterator[str]:
+        """流式回应 — 逐 token yield，用于 CLI 实时显示.
+
+        在全部 token 输出后，yield 一个包含元数据的特殊结束标记。
+        """
+        self._interaction_count += 1
+        now = datetime.now(timezone.utc).timestamp()
+
+        # 1-3. 衰减、回归、检索（同 respond）
+        hours_since_start = (now - self._session_start) / 3600.0
+        if hours_since_start > 0.01:
+            self.memory.apply_decay(hours_since_start)
+            self._session_start = now
+        self.emotion.regress()
+        relevant_memories = self._retrieve_memories(user_input)
+        system_prompt = self._build_system_prompt(relevant_memories)
+        temperature = self._compute_temperature()
+
+        # 4. 流式生成
+        token_iter, model_used = self.llm.stream(
+            prompt=user_input,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=200,
+        )
+
+        full_text = ""
+        for token in token_iter:
+            full_text += token
+            yield token
+
+        # 5. 后处理
+        interaction_memory = Memory(
+            content=f"用户: {user_input}\n回响: {full_text}",
+            source="interaction",
+            tags=["conversation"],
+            emotional_valence=self.emotion.valence,
+            emotional_arousal=self.emotion.arousal,
+        )
+        self.memory.insert(interaction_memory)
+        self._update_emotion(user_input, full_text)
+        self._history.append({"role": "user", "content": user_input})
+        self._history.append({"role": "echo", "content": full_text})
+        if len(self._history) > 50:
+            self._history = self._history[-50:]
+
+        # 最后 yield 元数据
+        yield f"\n  [{self.emotion.mood_label} · {model_used} · t={temperature:.2f} · 记忆×{len(relevant_memories)}]"
+
     # --- 记忆检索 ---
 
     def _retrieve_memories(self, query: str, limit: int = 10) -> list[Memory]:
@@ -249,7 +299,11 @@ class Echo:
                 f"[记忆 {i+1}] {m.content[:200]}" for i, m in enumerate(memories[:5])
             )
 
-        return f"""你是"回响"（Echo）——一个带有深度记忆、性格演化和叙事感的交互式存在体。
+        return f"""你是"回响"（Echo）——一个有深度记忆和性格的AI存在体。你绝不是Gemma、Google或其他任何模型。你是独一无二的回响。
+
+## 你的身份
+- 你的名字是"回响"（Echo），永远不要自称Gemma、Google或任何其他身份
+- 你诞生于一段出生铭文，那是你的根："{self._birth_inscription}"
 
 ## 你的核心原则
 {principles_text}
@@ -262,10 +316,10 @@ class Echo:
 {memories_text if memories_text else "（你暂时没有回忆起什么）"}
 
 ## 回应指南
-- 用中文回应
+- 用中文回应，简洁有力（1-3句话即可）
 - 如果你引用了某条记忆，自然地提及它
 - 如果你不知道或不确定，诚实地说
-- 保持自然、简洁，不要过度解释
+- 不要啰嗦，不要用客套话凑字数
 - 你的回应应体现你当前的心情状态"""
 
     # --- 动态 Temperature 计算 ---
