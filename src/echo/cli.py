@@ -20,6 +20,18 @@ from rich.columns import Columns
 from rich.align import Align
 from rich import box
 
+# 纯水平线边框（无竖边）— 只画顶/底/标题分隔三条横线
+H_BOX = box.Box(
+    "────\n"
+    "    \n"
+    "────\n"
+    "    \n"
+    "────\n"
+    "    \n"
+    "    \n"
+    "    \n"
+)
+
 from echo.agent.core import Echo
 
 console = Console()
@@ -131,6 +143,7 @@ def _welcome(echo: Echo) -> None:
     panel = Panel(
         Align.center(inner),
         border_style=C_DIM,
+        box=H_BOX,
         padding=(1, 4),
     )
     console.print(panel)
@@ -149,7 +162,7 @@ def _help_panel() -> Panel:
         ("/quit", "退出对话，回响将压缩记忆后休眠"),
     ]:
         t.add_row(cmd, desc)
-    return Panel(t, title="命令列表", border_style=C_ACCENT, padding=(1, 2))
+    return Panel(t, title="命令列表", border_style=C_ACCENT, box=H_BOX, padding=(1, 2))
 
 
 def _status_view(echo: Echo) -> None:
@@ -179,8 +192,8 @@ def _status_view(echo: Echo) -> None:
     right.add_row("记忆", f"{s['memory_count']} 条（本会话 {s['interaction_count']} 轮）")
 
     columns = Columns([
-        Panel(left, title="身份", border_style=C_BIRTH, padding=(1, 2)),
-        Panel(right, title="状态", border_style=C_ECHO, padding=(1, 2)),
+        Panel(left, title="身份", border_style=C_BIRTH, box=H_BOX, padding=(1, 2)),
+        Panel(right, title="状态", border_style=C_ECHO, box=H_BOX, padding=(1, 2)),
     ])
     console.print(columns)
 
@@ -213,7 +226,7 @@ def _emotion_view(echo: Echo) -> None:
     inner.append(" " * 14)
     inner.append("激动 →", style=C_DIM)
 
-    panel = Panel(inner, title="情感仪表盘", border_style=C_ECHO, padding=(1, 3))
+    panel = Panel(inner, title="情感仪表盘", border_style=C_ECHO, box=H_BOX, padding=(1, 3))
     console.print(panel)
 
 
@@ -223,7 +236,7 @@ def _memories_view(echo: Echo) -> None:
     birth = echo.memory.get_birth()
     active = echo.memory.list_active(limit=12)
 
-    t = Table(box=box.SIMPLE_HEAVY, show_header=True, padding=(0, 1),
+    t = Table(box=box.SIMPLE, show_header=True, padding=(0, 1),
               title=f"记忆浏览 · 共 {count} 条", title_style="bold bright_yellow")
     t.add_column("", width=2)
     t.add_column("来源", style=C_DIM, width=9)
@@ -244,7 +257,7 @@ def _memories_view(echo: Echo) -> None:
             m.content[:52] + ("…" if len(m.content) > 52 else ""),
             Text(f"{m.priority_score:.2f}", style=C_DIM),
         )
-    console.print(Panel(t, border_style=C_DIM, padding=(0, 1)))
+    console.print(Panel(t, border_style=C_DIM, box=H_BOX, padding=(0, 1)))
 
 
 # ═══════════════════════════════════════════════════════
@@ -273,7 +286,7 @@ def _render_echo_message(echo: Echo, full_text: str, tool_calls: list[str],
         title=title,
         title_align="left",
         border_style=mood_color,
-        box=box.ROUNDED,
+        box=H_BOX,
         padding=(1, 2),
     )
     console.print(panel)
@@ -284,7 +297,7 @@ def _render_user_message(text: str) -> None:
     panel = Panel(
         Text(text, style=C_USER),
         border_style=C_DIM,
-        box=box.ROUNDED,
+        box=H_BOX,
         padding=(0, 2),
     )
     console.print(Align.right(panel, width=min(len(text) + 10, console.width - 10)))
@@ -327,7 +340,7 @@ def main():
                 if cmd == "/quit":
                     farewell = Panel(
                         Text("再见。我会记得这次对话。", style=C_ECHO),
-                        border_style=C_DIM, box=box.ROUNDED,
+                        border_style=C_DIM, box=H_BOX,
                     )
                     console.print(farewell)
                     break
