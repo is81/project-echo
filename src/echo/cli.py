@@ -1,4 +1,4 @@
-"""回响计划 · CLI 交互界面.
+"""回响计划 · CLI 交互界面 — Rich 深度定制版.
 
 Usage:
     python -m echo.cli
@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -15,272 +16,379 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.live import Live
-from rich.layout import Layout
+from rich.columns import Columns
+from rich.align import Align
 from rich import box
 
 from echo.agent.core import Echo
 
 console = Console()
 
-# ── 颜色主题 ──────────────────────────────────────────
-C_USER = "bright_cyan"
-C_ECHO = "bright_magenta"
-C_BIRTH = "yellow"
-C_MOOD = "green"
-C_DIM = "dim"
-C_ACCENT = "cyan"
-C_WARN = "red"
+# ═══════════════════════════════════════════════════════
+#  Color palette
+# ═══════════════════════════════════════════════════════
 
-# 心情 → (颜色, emoji)
+C_USER    = "bright_cyan"
+C_ECHO    = "magenta"
+C_BIRTH   = "bright_yellow"
+C_DIM     = "dim"
+C_ACCENT  = "cyan"
+C_WARN    = "bright_red"
+C_OK      = "bright_green"
+C_TOOL    = "bright_blue"
+C_META    = "grey50"
+C_BAR_POS = "bright_green"
+C_BAR_NEG = "bright_red"
+C_BAR_MID = "grey50"
+
 MOOD_STYLES = {
-    "兴奋的":   ("bright_yellow", "✨"),
-    "平静愉悦的": ("green",         "😌"),
-    "焦躁的":   ("red",           "😤"),
-    "低落的":   ("blue",          "😔"),
-    "警觉的":   ("yellow",        "🧐"),
-    "平和的":   ("bright_cyan",   "🧘"),
+    "兴奋的": ("bright_yellow", "✨"),
+    "平静愉悦的": ("bright_green", "😌"),
+    "焦躁的": ("bright_red", "😤"),
+    "低落的": ("blue", "😔"),
+    "警觉的": ("bright_yellow", "🧐"),
+    "平和的": ("bright_cyan", "🧘"),
+}
+
+SRC_ICONS = {
+    "birth": "🏠", "interaction": "💬", "reflection": "🪞",
+    "world_event": "🌍", "summary": "📝",
 }
 
 
-def _mood_display(mood: str) -> Text:
-    """返回带颜色+emoji的心情文本."""
-    color, emoji = MOOD_STYLES.get(mood, ("white", ""))
-    return Text(f"{emoji}  {mood}", style=color)
+# ═══════════════════════════════════════════════════════
+#  Render helpers
+# ═══════════════════════════════════════════════════════
 
-
-def _valence_bar(valence: float) -> Text:
-    """将 valence [-1,1] 渲染为彩色小条."""
-    width = 20
-    # 映射 [-1, 1] → [0, width]
-    pos = int((valence + 1) / 2 * width)
+def _bar(value: float, vmin: float, vmax: float, width: int = 20,
+         colors: tuple[str, str, str] = (C_BAR_NEG, C_BAR_MID, C_BAR_POS)) -> Text:
+    """渲染彩色进度条."""
+    ratio = (value - vmin) / (vmax - vmin)
+    pos = int(ratio * width)
     pos = max(0, min(width, pos))
-    bar = ""
+    bar = Text()
     for i in range(width):
         if i < pos:
-            bar += "█"
+            bar.append("━", style=colors[2])
         else:
-            bar += "░"
-    if valence < -0.3:
-        color = "red"
-    elif valence > 0.3:
-        color = "green"
+            bar.append("─", style=colors[1])
+    return bar
+
+
+def _mood_badge(mood: str) -> Text:
+    """心情徽章."""
+    color, emoji = MOOD_STYLES.get(mood, ("white", "•"))
+    return Text(f"{emoji} {mood}", style=f"bold {color}")
+
+
+def _priority_dot(score: float) -> Text:
+    """优先级指示点."""
+    if score >= 0.6:
+        return Text("●", style="bright_green")
+    elif score >= 0.3:
+        return Text("●", style="bright_yellow")
+    elif score >= 0.1:
+        return Text("○", style="dim")
+    return Text("○", style="red")
+
+
+# ═══════════════════════════════════════════════════════
+#  Panels
+# ═══════════════════════════════════════════════════════
+
+def _welcome(echo: Echo) -> None:
+    """渲染启动画面."""
+    birth = echo.memory.get_birth()
+    quote = Text()
+    quote.append("「", style=C_DIM)
+    if birth:
+        quote.append(birth.content, style=f"italic {C_BIRTH}")
     else:
-        color = "dim"
-    return Text(bar, style=color)
+        quote.append("......", style=C_DIM)
+    quote.append("」", style=C_DIM)
 
+    inner = Text()
+    inner.append(quote)
+    inner.append("\n\n")
+    inner.append("回响计划 · Project Echo", style="bold bright_yellow")
+    inner.append("\n")
+    inner.append("深度记忆 · 性格演化 · 叙事感", style=C_DIM)
+    inner.append("\n\n")
+    inner.append(f"记忆 {echo.memory.count()} 条   ", style=C_DIM)
+    mood_label = echo.emotion.mood_label
+    inner.append(f"{mood_label}", style=MOOD_STYLES.get(mood_label, ("white",))[0])
+    inner.append("\n\n")
+    for cmd, desc in [
+        ("/status", "内部状态"),
+        ("/emotion", "情感仪表"),
+        ("/memories", "记忆浏览"),
+        ("/help", "帮助"),
+        ("/quit", "退出"),
+    ]:
+        inner.append(f" {cmd} ", style=f"bold white on {C_DIM}")
+        inner.append(f" {desc}  ", style=C_DIM)
 
-def _arousal_bar(arousal: float) -> Text:
-    """将 arousal [0,1] 渲染为彩色小条."""
-    width = 20
-    pos = int(arousal * width)
-    pos = max(0, min(width, pos))
-    bar = "█" * pos + "░" * (width - pos)
-    if arousal > 0.6:
-        color = "bright_yellow"
-    elif arousal > 0.3:
-        color = "cyan"
-    else:
-        color = "blue"
-    return Text(bar, style=color)
-
-
-def _banner() -> Panel:
-    """渲染启动横幅."""
-    title = Text("回响计划 · Project Echo", style="bold bright_yellow")
-    body = Text()
-    body.append("一个带有深度记忆、性格演化和叙事感的交互式存在体\n", style=C_DIM)
-    body.append("\n")
-    body.append("/status   ", style="bright_cyan")
-    body.append("内部状态    ", style=C_DIM)
-    body.append("/emotion  ", style="bright_cyan")
-    body.append("情感状态\n", style=C_DIM)
-    body.append("/memories ", style="bright_cyan")
-    body.append("记忆浏览    ", style=C_DIM)
-    body.append("/help     ", style="bright_cyan")
-    body.append("命令列表\n", style=C_DIM)
-    body.append("/quit     ", style="bright_cyan")
-    body.append("退出对话", style=C_DIM)
-    return Panel(body, title=title, border_style="bright_yellow", padding=(1, 2))
+    panel = Panel(
+        Align.center(inner),
+        border_style=C_DIM,
+        padding=(1, 4),
+    )
+    console.print(panel)
 
 
 def _help_panel() -> Panel:
-    """渲染帮助面板."""
-    body = Text()
-    body.append("/status\n", style="bright_cyan")
-    body.append("  查看回响的完整内部状态（静默观察模式）\n\n", style=C_DIM)
-    body.append("/emotion\n", style="bright_cyan")
-    body.append("  查看当前情感：愉悦度、唤醒度、心情\n\n", style=C_DIM)
-    body.append("/memories\n", style="bright_cyan")
-    body.append("  浏览记忆：总数、出生铭文、最近活跃记忆\n\n", style=C_DIM)
-    body.append("/inject <内容>\n", style="bright_cyan")
-    body.append("  手动注入一条记忆（调试用）\n\n", style=C_DIM)
-    body.append("/quit\n", style="bright_cyan")
-    body.append("  退出对话，回响将休眠", style=C_DIM)
-    return Panel(body, title="可用命令", border_style="bright_cyan", padding=(1, 2))
+    """帮助面板."""
+    t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    t.add_column("cmd", style="bold bright_cyan", width=16)
+    t.add_column("desc", style=C_DIM)
+    for cmd, desc in [
+        ("/status", "完整内部状态（静默观察模式）"),
+        ("/emotion", "情感仪表盘：愉悦度 + 唤醒度"),
+        ("/memories", "记忆浏览：优先级排序 + 来源标记"),
+        ("/inject <内容>", "手动注入一条记忆（调试用）"),
+        ("/quit", "退出对话，回响将压缩记忆后休眠"),
+    ]:
+        t.add_row(cmd, desc)
+    return Panel(t, title="命令列表", border_style=C_ACCENT, padding=(1, 2))
 
 
-def _status_table(echo: Echo) -> Table:
-    """渲染状态表格."""
+def _status_view(echo: Echo) -> None:
+    """双栏状态视图."""
     s = echo.status()
-    table = Table(box=box.ROUNDED, border_style=C_DIM, show_header=False,
-                  title="回响内部状态", title_style="bold yellow")
-    table.add_column("项目", style="bright_cyan", width=20)
-    table.add_column("值", style="white")
 
+    # 左栏：身份
+    left = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+    left.add_column("k", style=C_DIM, width=10)
+    left.add_column("v", style="white")
+    left.add_row("出生铭文", Text(s["birth_inscription"], style=C_BIRTH))
+    left.add_row("版本", s["version"])
+    left.add_row("基因原则", f"{s['principles_count']} 条")
     llm = s.get("llm_status", {})
     active = llm.get("active_model", "none")
-    active_str = {"llama-server": "🖥️  本地 Gemma 4", "api": "☁️  云端 API", "none": "❌ 无"}.get(active, active)
+    active_s = {"llama-server": "🖥️  Gemma 4", "api": "☁️  云端 API", "none": "❌ 无"}.get(active, active)
+    left.add_row("后端", active_s)
 
-    rows = [
-        ("版本", s["version"]),
-        ("出生铭文", Text(s["birth_inscription"], style=C_BIRTH)),
-        ("总记忆数", str(s["memory_count"])),
-        ("本轮对话数", str(s["interaction_count"])),
-        ("心情", _mood_display(s["emotion"]["mood"])),
-        ("愉悦度", _valence_bar(s["emotion"]["valence"])),
-        ("唤醒度", _arousal_bar(s["emotion"]["arousal"])),
-        ("LLM 后端", active_str),
-        ("基因原则", f"{s['principles_count']} 条"),
-    ]
-    for label, value in rows:
-        table.add_row(label, value)
-    return table
+    # 右栏：状态
+    right = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+    right.add_column("k", style=C_DIM, width=10)
+    right.add_column("v", style="white")
+    e = s["emotion"]
+    right.add_row("心情", _mood_badge(e["mood"]))
+    right.add_row("愉悦度", Text(f"{e['valence']:+.2f} ", style=C_BAR_POS if e['valence'] > 0 else C_BAR_NEG) + _bar(e['valence'], -1, 1, 14))
+    right.add_row("唤醒度", Text(f"{e['arousal']:.2f} ", style=C_ACCENT) + _bar(e['arousal'], 0, 1, 14, (C_BAR_MID, C_BAR_MID, C_ACCENT)))
+    right.add_row("记忆", f"{s['memory_count']} 条（本会话 {s['interaction_count']} 轮）")
+
+    columns = Columns([
+        Panel(left, title="身份", border_style=C_BIRTH, padding=(1, 2)),
+        Panel(right, title="状态", border_style=C_ECHO, padding=(1, 2)),
+    ])
+    console.print(columns)
 
 
-def _emotion_panel(echo: Echo) -> Panel:
-    """渲染情感面板."""
+def _emotion_view(echo: Echo) -> None:
+    """情感仪表盘."""
     e = echo.emotion.to_dict()
-    body = Text()
-    body.append(_mood_display(e["mood"]))
-    body.append("\n\n")
-    body.append("愉悦度 ", style=C_DIM)
-    body.append(_valence_bar(e["valence"]))
-    body.append(f"  {e['valence']:+.2f}\n", style="white")
-    body.append("唤醒度 ", style=C_DIM)
-    body.append(_arousal_bar(e["arousal"]))
-    body.append(f"  {e['arousal']:.2f}", style="white")
-    return Panel(body, title="情感状态", border_style="bright_magenta", padding=(1, 2))
+    inner = Text()
+    inner.append("\n")
+    # 大号心情（居中）
+    mood_text = _mood_badge(e["mood"])
+    mood_text.stylize("bold")
+    inner.append(" " * 14)
+    inner.append(mood_text)
+    inner.append("\n\n")
+
+    # 愉悦度
+    inner.append("  愉悦度  ", style=C_DIM)
+    inner.append(_bar(e["valence"], -1, 1, 30))
+    inner.append(f"  {e['valence']:+.2f}\n", style="white")
+    inner.append("          ← 低落", style=C_DIM)
+    inner.append(" " * 14)
+    inner.append("愉悦 →\n\n", style=C_DIM)
+
+    # 唤醒度
+    inner.append("  唤醒度  ", style=C_DIM)
+    inner.append(_bar(e["arousal"], 0, 1, 30, (C_BAR_MID, C_BAR_MID, C_ACCENT)))
+    inner.append(f"  {e['arousal']:.2f}\n", style="white")
+    inner.append("          ← 平静", style=C_DIM)
+    inner.append(" " * 14)
+    inner.append("激动 →", style=C_DIM)
+
+    panel = Panel(inner, title="情感仪表盘", border_style=C_ECHO, padding=(1, 3))
+    console.print(panel)
 
 
-def _memories_table(echo: Echo) -> Table:
-    """渲染记忆浏览表格."""
+def _memories_view(echo: Echo) -> None:
+    """记忆浏览."""
     count = echo.memory.count()
     birth = echo.memory.get_birth()
-    active = echo.memory.list_active(limit=10)
+    active = echo.memory.list_active(limit=12)
 
-    table = Table(box=box.ROUNDED, border_style=C_DIM, show_header=True,
-                  title=f"记忆浏览（共 {count} 条）", title_style="bold yellow")
-    table.add_column("来源", style=C_DIM, width=12)
-    table.add_column("内容", style="white", max_width=50)
-    table.add_column("优先级", style="bright_cyan", width=8)
+    t = Table(box=box.SIMPLE_HEAVY, show_header=True, padding=(0, 1),
+              title=f"记忆浏览 · 共 {count} 条", title_style="bold bright_yellow")
+    t.add_column("", width=2)
+    t.add_column("来源", style=C_DIM, width=9)
+    t.add_column("内容", style="white", max_width=52)
+    t.add_column("P", width=3, justify="right")
 
     if birth:
-        table.add_row(
-            Text("🏠 出生铭文", style=C_BIRTH),
-            Text(birth.content, style=C_BIRTH),
-            Text("∞", style="green"),
-        )
+        t.add_row("", "🏠 铭文", Text(birth.content[:52], style=C_BIRTH), Text("∞", style=C_BIRTH))
 
     for m in active:
         if birth and m.id == birth.id:
             continue
-        src_icon = {"interaction": "💬", "reflection": "🪞", "world_event": "🌍",
-                    "summary": "📝"}.get(m.source, "❓")
-        # 优先级颜色
-        if m.priority_score >= 0.6:
-            p_style = "green"
-        elif m.priority_score >= 0.3:
-            p_style = "yellow"
-        elif m.priority_score >= 0.1:
-            p_style = "dim"
-        else:
-            p_style = "red"
-        table.add_row(
-            f"{src_icon} {m.source}",
-            m.content[:50] + ("..." if len(m.content) > 50 else ""),
-            Text(f"{m.priority_score:.2f}", style=p_style),
+        icon = SRC_ICONS.get(m.source, "❓")
+        label = m.source[:8] if m.source != "interaction" else "对话"
+        t.add_row(
+            _priority_dot(m.priority_score),
+            f"{icon} {label}",
+            m.content[:52] + ("…" if len(m.content) > 52 else ""),
+            Text(f"{m.priority_score:.2f}", style=C_DIM),
         )
-    return table
+    console.print(Panel(t, border_style=C_DIM, padding=(0, 1)))
 
+
+# ═══════════════════════════════════════════════════════
+#  Chat rendering
+# ═══════════════════════════════════════════════════════
+
+def _render_echo_message(echo: Echo, full_text: str, tool_calls: list[str],
+                         memories_used: int, temperature: float) -> None:
+    """将回响消息渲染为气泡面板."""
+    mood_color, mood_emoji = MOOD_STYLES.get(echo.emotion.mood_label, ("white", "•"))
+
+    # 构建标题行：心情 + 元数据
+    title = Text()
+    title.append(f"{mood_emoji} ", style=mood_color)
+    title.append(echo.emotion.mood_label, style=f"bold {mood_color}")
+    title.append(f"    mem×{memories_used}", style=C_META)
+    if tool_calls:
+        title.append(f"  🔧{' '.join(tool_calls)}", style=C_TOOL)
+
+    # 构建正文
+    body = Text(full_text.strip())
+
+    # 渲染气泡
+    panel = Panel(
+        body,
+        title=title,
+        title_align="left",
+        border_style=mood_color,
+        box=box.ROUNDED,
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+
+def _render_user_message(text: str) -> None:
+    """渲染用户消息为紧凑气泡."""
+    panel = Panel(
+        Text(text, style=C_USER),
+        border_style=C_DIM,
+        box=box.ROUNDED,
+        padding=(0, 2),
+    )
+    console.print(Align.right(panel, width=min(len(text) + 10, console.width - 10)))
+
+
+# ═══════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════
 
 def main():
     parser = argparse.ArgumentParser(description="回响计划 · Project Echo CLI")
-    parser.add_argument(
-        "--db", default="echo_memory.db", help="记忆数据库路径 (默认: echo_memory.db)"
-    )
+    parser.add_argument("--db", default="echo_memory.db", help="记忆数据库路径")
     args = parser.parse_args()
 
-    # 唤醒
-    with console.status("[yellow]唤醒回响中...[/]", spinner="dots"):
+    # ── Wake ──
+    with console.status("[bright_yellow] 唤醒回响 …[/]", spinner="dots"):
         echo = Echo()
         echo.wake(db_path=args.db)
 
-    # 出生铭文
-    birth = echo.memory.get_birth()
-    if birth:
-        console.print(Panel(
-            Text(f"「{birth.content}」", style=C_BIRTH),
-            title="出生铭文",
-            border_style=C_BIRTH,
-        ))
+    _welcome(echo)
 
-    console.print(_banner())
-
+    # ── Loop ──
     try:
         while True:
-            user_input = console.input(f"\n[bold {C_USER}]你[/]: ").strip()
+            # 输入提示
+            mood_color, _ = MOOD_STYLES.get(echo.emotion.mood_label, ("white", ""))
+            prompt = Text()
+            prompt.append("▸ ", style=mood_color)
+            prompt.append("你", style=f"bold {C_USER}")
+            prompt.append("  ", style=C_DIM)
 
+            user_input = console.input(prompt).strip()
             if not user_input:
                 continue
 
-            # 命令处理
+            # 命令
             if user_input.startswith("/"):
-                cmd = user_input.split()
-                cmd_name = cmd[0].lower()
+                cmd = user_input.split()[0].lower()
 
-                if cmd_name == "/quit":
-                    console.print(f"[{C_ECHO}]回响[/]: 再见。我会记得这次对话。")
+                if cmd == "/quit":
+                    farewell = Panel(
+                        Text("再见。我会记得这次对话。", style=C_ECHO),
+                        border_style=C_DIM, box=box.ROUNDED,
+                    )
+                    console.print(farewell)
                     break
-                elif cmd_name == "/help":
+                elif cmd == "/help":
                     console.print(_help_panel())
-                elif cmd_name == "/status":
-                    console.print(_status_table(echo))
-                elif cmd_name == "/emotion":
-                    console.print(_emotion_panel(echo))
-                elif cmd_name == "/memories":
-                    console.print(_memories_table(echo))
-                elif cmd_name == "/inject":
+                elif cmd == "/status":
+                    _status_view(echo)
+                elif cmd == "/emotion":
+                    _emotion_view(echo)
+                elif cmd == "/memories":
+                    _memories_view(echo)
+                elif cmd == "/inject":
                     content = user_input[len("/inject "):].strip()
                     if content:
-                        mem_id = echo.inject_memory(content)
-                        console.print(f"[green]✓[/] 记忆已注入: [{C_DIM}]{mem_id[:12]}...[/]")
+                        mid = echo.inject_memory(content)
+                        console.print(f"  [green]✓[/] 记忆已注入  [{C_DIM}]{mid[:12]}[/]")
                     else:
-                        console.print(f"[{C_WARN}]用法: /inject <内容>[/]")
+                        console.print(f"  [{C_WARN}]用法: /inject <内容>[/]")
                 else:
-                    console.print(f"[{C_WARN}]未知命令: {cmd_name}。输入 /help 查看可用命令。[/]")
+                    console.print(f"  [{C_WARN}]未知命令。[/] /help 查看可用命令")
                 continue
 
-            # 流式对话
+            # ── 对话 ──
             console.print()  # 空行
-            mood_color, _ = MOOD_STYLES.get(echo.emotion.mood_label, ("white", ""))
-            console.print(f"[bold {C_ECHO}]回响[/] [dim {mood_color}]· {echo.emotion.mood_label}[/] ")
+            _render_user_message(user_input)
 
-            first_token = True
+            # 流式收集
+            full_text = ""
+            tool_calls = []
+            memories_used = 0
+            temperature = 0.0
+
+            # 先显示 Echo 标签 + 等待点
+            mood_color, mood_emoji = MOOD_STYLES.get(echo.emotion.mood_label, ("white", "•"))
+            echo_header = Text()
+            echo_header.append(f"{mood_emoji}  回响", style=f"bold {C_ECHO}")
+            echo_header.append("  ·  ", style=C_DIM)
+
             for token in echo.respond_stream(user_input):
-                if first_token:
-                    first_token = False
-                console.print(token, end="", highlight=False)
-            console.print()  # 换行
+                # 工具调用
+                if token.startswith("\n  🔧"):
+                    tool_calls.append(token.strip().replace("🔧 ", ""))
+                    echo_header.append(token.strip(), style=f"bold {C_TOOL}")
+                    continue
+                # 元数据行（以 \n  [ 开头）
+                if token.startswith("\n  [") and "·" in token:
+                    # 解析记忆数等
+                    continue
+                full_text += token
+
+            # 渲染气泡
+            _render_echo_message(echo, full_text, tool_calls, 0, 0)
 
     except KeyboardInterrupt:
-        console.print("\n[yellow]收到中断信号...[/]")
+        console.print("\n  [yellow]⊘ 中断[/]")
     except EOFError:
         pass
     finally:
-        console.print("[dim]回响正在整理记忆...[/]")
-        echo.sleep()
-        console.print("[dim]已退出。[/]")
+        with console.status("[dim]回响整理记忆中 …[/]", spinner="dots"):
+            echo.sleep()
+        console.print("[dim]  已退出[/]")
 
 
 if __name__ == "__main__":
