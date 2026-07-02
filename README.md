@@ -50,9 +50,11 @@ Project Echo/
 # 1. 启动 llama-server（Gemma 4 12B QAT + 禁用推理加速）
 llama-server -m <模型路径> --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --reasoning off
 
-# 2. 启动回响
+# 2. 安装
 pip install -e .
-python -m echo.cli
+
+# 3. 在任何目录启动
+echo-chat
 ```
 
 ## 技术栈
