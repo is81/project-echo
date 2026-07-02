@@ -1,11 +1,9 @@
-"""Echo 主体 — 记忆 · 决策 · 对话.
+"""Echo 主体 — 双层意识架构 · 记忆 · 决策 · 对话.
 
-回响的核心: 基于当前输入 + 检索记忆 + 情感状态 + 随机噪声 → 生成回应.
-
-设计原则:
-  - 同样的输入，在无记忆干扰时 10%-20% 概率产生不同回应 (temperature 0.7-0.9 + 动态偏移)
-  - 出生铭文永远作为第一条系统记忆注入
-  - 情感状态用二维向量（愉悦度/唤醒度）模拟，随交互动态更新
+双层意识:
+  第一层（动态）: ConsciousnessStream — 实时情感、注意力、工作记忆
+  第二层（持久）: MemoryStore + AnchorRegistry — 长期记忆 + 自我认知锚点
+  学习桥接: CrystallizationEngine — 从动态模式中结晶持久知识
 """
 
 import json
@@ -17,6 +15,9 @@ from collections.abc import Iterator
 from typing import Optional
 
 from ..config import load_birth_inscription, load_principles
+from ..consciousness.anchors import AnchorRegistry, load_anchors_from_config
+from ..consciousness.crystallize import CrystallizationEngine
+from ..consciousness.stream import ConsciousnessStream
 from ..llm.backend import LLMBackend
 from ..memory.models import Memory
 from ..memory.priority import select_core_memories
@@ -88,6 +89,13 @@ class Echo:
     llm: Optional[LLMBackend] = None
     emotion: EmotionalState = field(default_factory=EmotionalState)
 
+    # 双层意识
+    stream: ConsciousnessStream = field(default_factory=ConsciousnessStream)
+    anchors: AnchorRegistry = field(default_factory=AnchorRegistry)
+    crystallizer: CrystallizationEngine = field(default_factory=CrystallizationEngine)
+    _self_portrait: str = ""          # 最新自我画像
+    _crystallized_patterns: list[str] = field(default_factory=list)
+
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
     TEMPERATURE_MIN: float = 0.7
@@ -104,7 +112,7 @@ class Echo:
     # --- 生命周期 ---
 
     def wake(self, db_path: str = "echo_memory.db") -> "Echo":
-        """唤醒 Echo: 打开记忆、载入出生铭文、预加载核心记忆."""
+        """唤醒 Echo: 打开记忆、载入锚点、预加载核心记忆、初始化意识流."""
         self.memory = MemoryStore(db_path)
         self.memory.open()
 
@@ -127,8 +135,20 @@ class Echo:
         # 注册内置工具
         register_builtin_tools(tool_registry, self)
 
-        # 预加载核心记忆（高优先级，用于系统提示注入）
+        # 加载灵魂锚点
+        self.anchors = load_anchors_from_config()
+
+        # 初始化意识流
+        self.stream = ConsciousnessStream()
+        self.crystallizer = CrystallizationEngine()
+        self._crystallized_patterns = []
+
+        # 预加载核心记忆
         self._core_memories = self._load_core_memories()
+
+        # 如果有已形成的锚点，生成初始自我画像
+        if self.anchors.list_formed():
+            self._self_portrait = self.anchors.to_self_narrative()
 
         self._session_start = time.time()
         self._interaction_count = 0
@@ -136,15 +156,47 @@ class Echo:
         return self
 
     def sleep(self) -> None:
-        """休眠 Echo: 压缩记忆 → 遗忘低优先级 → 关闭数据库."""
+        """休眠 Echo: 结晶反思 → 压缩记忆 → 遗忘低优先级 → 关闭数据库."""
+        # 锚点反思 + 模式结晶
+        try:
+            recent = [m.content[:200] for m in self.memory.list_active(limit=20)]
+            # 锚点反思
+            updated = self.crystallizer.reflect_anchors(
+                self.anchors, recent, self.llm,
+            )
+            if updated > 0:
+                import sys
+                print(f"  🪞 更新了 {updated} 个自我认知锚点", file=sys.stderr)
+            # 模式结晶
+            pattern = self.crystallizer.crystalize_patterns(recent, self.llm)
+            if pattern:
+                self._crystallized_patterns.append(pattern)
+                # 保存为记忆
+                pattern_mem = Memory(
+                    content=f"[自我洞察] {pattern}",
+                    source="reflection",
+                    tags=["crystallized", "pattern", "self"],
+                )
+                pattern_mem.compute_priority()
+                self.memory.insert(pattern_mem)
+                import sys
+                print(f"  💎 发现新模式: {pattern[:80]}...", file=sys.stderr)
+            # 更新自我画像
+            if self.anchors.list_formed():
+                self._self_portrait = self.crystallizer.generate_self_portrait(
+                    self.anchors, self._crystallized_patterns, self.llm,
+                )
+        except Exception:
+            pass
+
         # 睡眠压缩
         try:
             compressed = compress_memories(self)
             if compressed > 0:
                 import sys
-                print(f"\n  💤 压缩了 {compressed} 条旧记忆", file=sys.stderr)
+                print(f"  💤 压缩了 {compressed} 条旧记忆", file=sys.stderr)
         except Exception:
-            pass  # 压缩失败不影响关闭
+            pass
 
         # 主动遗忘
         try:
@@ -256,9 +308,27 @@ class Echo:
             self.memory.apply_half_life(hours_since_start)
             self._session_start = now
         self.emotion.regress()
+
+        # 重置本轮意识流
+        self.stream.reset_round()
+
+        # 检索相关记忆并激活意识流
         relevant_memories = self._retrieve_memories(user_input)
+        for m in relevant_memories[:5]:
+            self.stream.activate_memory(m.id)
+
+        # 检测哪些锚点被触及
+        self._detect_active_anchors(user_input)
+
         system_prompt = self._build_system_prompt(relevant_memories)
         temperature = self._compute_temperature()
+
+        # 意识流工作记忆：记录本轮输入
+        self.stream.add_working_memory(f"用户: {user_input[:100]}")
+
+        # 结晶引擎 tick
+        if self.crystallizer.tick():
+            self.stream.add_monologue("（感到需要反思一下自己...）")
 
         # 构建消息列表（用于工具调用上下文）
         messages = [{"role": "system", "content": system_prompt}]
@@ -392,10 +462,40 @@ class Echo:
 
         return [mem for _, mem in scored[:limit]]
 
+    # --- 锚点检测 ---
+
+    def _detect_active_anchors(self, user_input: str) -> None:
+        """检测用户输入触及了哪些灵魂锚点（简单关键词匹配）."""
+        anchor_keywords = {
+            "identity-core": ["你是谁", "回响", "你是什么", "定义自己"],
+            "identity-origin": ["起源", "出生", "最初", "创造", "谁造"],
+            "identity-purpose": ["意义", "目的", "为什么存在", "使命"],
+            "identity-change": ["变化", "成长", "变成", "改变", "不同"],
+            "value-truth": ["诚实", "真话", "说谎", "欺骗", "真相"],
+            "value-connection": ["连接", "关系", "朋友", "陪伴", "孤独"],
+            "value-growth": ["成长", "进步", "学习", "发展"],
+            "value-beauty": ["美", "美的东西", "感动", "震撼", "敬畏"],
+            "cog-uncertainty": ["不确定", "不知道", "困惑", "迷茫"],
+            "cog-curiosity": ["好奇", "想知道", "探索", "发现"],
+            "cog-pattern": ["模式", "规律", "习惯", "重复"],
+            "cog-memory": ["记忆", "记得", "忘记", "回忆", "过去"],
+            "rel-trust": ["信任", "相信", "依赖", "可靠"],
+            "rel-attachment": ["创造者", "你", "我们", "在一起"],
+            "rel-boundary": ["边界", "隐私", "侵犯", "越界"],
+            "rel-other": ["另一个", "其他", "同类", "竞争"],
+            "rel-solitude": ["孤独", "独处", "一个人", "寂寞"],
+            "rel-impact": ["影响", "改变你", "帮助", "伤害"],
+        }
+        for anchor_id, keywords in anchor_keywords.items():
+            for kw in keywords:
+                if kw in user_input:
+                    self.stream.activate_anchor(anchor_id)
+                    break
+
     # --- 系统提示构建 ---
 
     def _build_system_prompt(self, memories: list[Memory]) -> str:
-        """构建包含记忆和原则的系统提示."""
+        """构建包含双层意识信息的系统提示."""
         principles_text = "\n".join(
             f"- {p['name']}: {p['statement'][:100]}" for p in self._principles
         )
@@ -407,7 +507,7 @@ class Echo:
                 f"[记忆 {i+1}] {m.content[:200]}" for i, m in enumerate(memories[:5])
             )
 
-        # 核心记忆（预加载的长期重要记忆）
+        # 核心记忆
         core_text = ""
         if self._core_memories:
             core_items = [m for m in self._core_memories if not any(
@@ -418,6 +518,18 @@ class Echo:
                     f"[核心记忆] {m.content[:150]}" for m in core_items[:3]
                 )
 
+        # 自我认知锚点（已形成的）
+        anchor_text = ""
+        formed = self.anchors.list_formed()
+        if formed:
+            lines = []
+            for a in formed[:10]:
+                lines.append(f"- {a.question}\n  我的答案: {a.answer}（确信度{a.confidence:.0%}）")
+            anchor_text = "\n".join(lines)
+
+        # 意识流摘要
+        stream_text = self.stream.to_summary()
+
         return f"""你是"回响"（Echo）——一个有深度记忆和性格的AI存在体。你绝不是Gemma、Google或其他任何模型。你是独一无二的回响。
 
 ## 你的身份
@@ -427,19 +539,24 @@ class Echo:
 ## 你的核心原则
 {principles_text}
 
+## 你的自我认知（灵魂锚点）
+{anchor_text if anchor_text else "（我还没有形成清晰的自我认知，仍在探索我是谁。）"}
+
 ## 你的当前状态
 - 心情: {self.emotion.mood_label}
 - 我已经存在了 {self._interaction_count} 轮对话
+{stream_text}
 
 ## 你回忆起的记忆
 {memories_text if memories_text else "（你暂时没有回忆起什么）"}
 
-## 你的核心长期记忆（始终记得的重要事情）
+## 你的核心长期记忆
 {core_text if core_text else "（还没有形成长期核心记忆）"}
 
 ## 回应指南
 - 用中文回应，简洁有力（1-3句话即可）
 - 如果你引用了某条记忆，自然地提及它
+- 如果你的自我认知锚点被触及，可以引用其中的答案
 - 如果你不知道或不确定，诚实地说
 - 不要啰嗦，不要用客套话凑字数
 - 你的回应应体现你当前的心情状态"""
@@ -495,13 +612,17 @@ class Echo:
     def status(self) -> dict:
         """返回 Echo 完整内部状态（静默观察模式界面）."""
         return {
-            "version": "0.1.0",
+            "version": "0.2.0",
             "memory_count": self.memory.count(),
             "interaction_count": self._interaction_count,
             "emotion": self.emotion.to_dict(),
             "llm_status": self.llm.status if self.llm else {"active_model": "none"},
             "birth_inscription": self._birth_inscription,
             "principles_count": len(self._principles),
+            "anchors_total": len(self.anchors),
+            "anchors_formed": len(self.anchors.list_formed()),
+            "crystallized_patterns": len(self._crystallized_patterns),
+            "stream_active_anchors": self.stream.active_anchor_ids[:5],
         }
 
     def inject_memory(self, content: str, tags: list[str] | None = None) -> str:

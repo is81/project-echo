@@ -162,6 +162,7 @@ def _help_panel() -> Panel:
         ("/quit", "退出对话，回响将压缩记忆后休眠"),
     ]:
         t.add_row(cmd, desc)
+    t.add_row("/anchors", "灵魂锚点：自我认知的核心问题与当前答案")
     return Panel(t, title="命令列表", border_style=C_ACCENT, box=H_BOX, padding=(1, 2))
 
 
@@ -180,6 +181,9 @@ def _status_view(echo: Echo) -> None:
     active = llm.get("active_model", "none")
     active_s = {"llama-server": "🖥️  Gemma 4", "api": "☁️  云端 API", "none": "❌ 无"}.get(active, active)
     left.add_row("后端", active_s)
+    left.add_row("灵魂锚点", f"{s['anchors_formed']}/{s['anchors_total']} 已形成")
+    if s.get("crystallized_patterns", 0) > 0:
+        left.add_row("结晶模式", f"{s['crystallized_patterns']} 个")
 
     # 右栏：状态
     right = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
@@ -258,6 +262,42 @@ def _memories_view(echo: Echo) -> None:
             Text(f"{m.priority_score:.2f}", style=C_DIM),
         )
     console.print(Panel(t, border_style=C_DIM, box=H_BOX, padding=(0, 1)))
+
+
+def _anchors_view(echo: Echo) -> None:
+    """灵魂锚点视图."""
+    formed = echo.anchors.list_formed()
+    unformed = echo.anchors.list_unformed()
+
+    t = Table(box=box.SIMPLE, show_header=True, padding=(0, 1),
+              title=f"灵魂锚点 · {len(formed)}/{len(echo.anchors)} 已形成",
+              title_style="bold bright_yellow")
+    t.add_column("维度", style=C_DIM, width=8)
+    t.add_column("问题", style="white", max_width=36)
+    t.add_column("答案", style=C_ACCENT, max_width=36)
+    t.add_column("确信", width=5, justify="right")
+
+    cat_names = {"identity": "身份", "values": "价值", "cognition": "认知", "relationships": "关系"}
+
+    for a in formed:
+        t.add_row(
+            cat_names.get(a.category, a.category),
+            a.question,
+            a.answer[:36] + ("…" if len(a.answer) > 36 else ""),
+            Text(f"{a.confidence:.0%}", style="green" if a.confidence >= 0.6 else "yellow"),
+        )
+
+    if unformed and len(unformed) <= 5:
+        t.add_section()
+        for a in unformed:
+            t.add_row(
+                cat_names.get(a.category, a.category),
+                Text(a.question, style=C_DIM),
+                Text("（尚未形成答案）", style=C_DIM),
+                Text("—", style=C_DIM),
+            )
+
+    console.print(Panel(t, border_style=C_ECHO, box=H_BOX, padding=(0, 1)))
 
 
 # ═══════════════════════════════════════════════════════
@@ -352,6 +392,8 @@ def main():
                     _emotion_view(echo)
                 elif cmd == "/memories":
                     _memories_view(echo)
+                elif cmd == "/anchors":
+                    _anchors_view(echo)
                 elif cmd == "/inject":
                     content = user_input[len("/inject "):].strip()
                     if content:
