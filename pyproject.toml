@@ -25,8 +25,5 @@ dev = [
     "pytest-asyncio>=0.21",
 ]
 
-[project.scripts]
-echo-chat = "echo.cli:main"
-
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -66,10 +66,6 @@ def _dot(s: float) -> Text:
 
 # ── 聊天气泡（简洁版）─────────────────────────────────
 
-def _chat_user(text: str) -> None:
-    """用户消息：右对齐，青色前缀."""
-    console.print(Text(f"▸ {text}", style=C_USER), justify="right")
-
 def _chat_echo(echo: Echo, text: str, tools: list[str]) -> None:
     """回响消息：左对齐，心情前缀."""
     mc, me = MOOD_STYLES.get(echo.emotion.mood_label, ("white", "•"))
@@ -225,7 +221,6 @@ def main():
                 continue
 
             # 对话
-            _chat_user(user_input)
             full_text = ""; tools = []
             for token in echo.respond_stream(user_input):
                 if token.startswith("\n  🔧"):
