@@ -45,7 +45,8 @@ class MemoryStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
-        self._migrate_schema()
+        self._migrate_schema()     # 必须在 _create_tables() 后，为旧库添加新列
+        self._create_indexes()     # 索引创建在迁移后，确保列已存在
         self._try_load_vec()
 
     def close(self) -> None:
@@ -73,13 +74,24 @@ class MemoryStore:
                 source TEXT DEFAULT 'interaction'
             )
         """)
+        # 基础索引（只涉及建表时就存在的列）
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source)",
             "CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories(archived)",
+        ]:
+            self._conn.execute(idx)
+        self._conn.commit()
+
+    def _create_indexes(self) -> None:
+        """在迁移后创建索引，确保所有列都已存在."""
+        for idx in [
             "CREATE INDEX IF NOT EXISTS idx_memories_forgotten ON memories(forgotten)",
             "CREATE INDEX IF NOT EXISTS idx_memories_priority ON memories(priority_score DESC)",
         ]:
-            self._conn.execute(idx)
+            try:
+                self._conn.execute(idx)
+            except sqlite3.OperationalError:
+                pass  # 列可能还不存在（极端情况）
         self._conn.commit()
 
     def _migrate_schema(self) -> None:
