@@ -122,19 +122,23 @@ def _search_web(query: str, max_results: int = 5) -> str:
         with urllib.request.urlopen(req, timeout=10) as resp:
             html_text = resp.read().decode("utf-8", errors="ignore")
 
-        results = []
-        for m in re.finditer(
-            r'<li class="b_algo"[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
-            r'<p[^>]*class="b_lineclamp\d*"[^>]*>(.*?)</p>',
+        # 分别抓取标题和摘要，再配对
+        titles = re.findall(
+            r'<h2[^>]*><a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>',
             html_text, re.DOTALL
-        ):
-            href, title, snippet = m.groups()
-            title = re.sub(r'<[^>]+>', '', title).strip()
-            snippet = re.sub(r'<[^>]+>', '', snippet).strip()
-            if title:
-                results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
-                if len(results) >= max_results:
-                    break
+        )
+        snippets = re.findall(
+            r'<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>(.*?)</p>',
+            html_text, re.DOTALL
+        )
+        results = []
+        for i, (href, title_raw) in enumerate(titles[:max_results]):
+            title = re.sub(r'<[^>]+>', '', title_raw).strip()
+            snippet = ""
+            if i < len(snippets):
+                snippet = re.sub(r'<[^>]+>', '', snippets[i]).strip()
+                snippet = re.sub(r'&ensp;|&#0183;|\s+', ' ', snippet).strip()
+            results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
 
         if results:
             return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
