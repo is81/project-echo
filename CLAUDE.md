@@ -12,15 +12,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 安装（开发模式）
 pip install -e .
 
-# 运行测试（20个）
+# 运行测试（31 个）
 python -m pytest tests/ -v
 
-# 启动 llama-server（必须先启动，端口 8080）
-llama-server -m <模型.gguf> --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --reasoning off
+# 一键启动（Windows PowerShell）
+.\start.ps1
 
-# 启动 CLI 对话
-python -m echo.cli
+# 手动启动
+llama-server -m <模型.gguf> --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --reasoning off
+python -m echo.cli                           # 聊天模式
+python -m echo.cli --explore                 # 探索模式（自主搜索学习）
+python -m echo.cli --explore --topic "话题1,话题2" --interval 5 --rounds 10
 ```
+
+### 对话内命令
+
+| 命令 | 作用 |
+|---|---|
+| `/status` | 完整内部状态 |
+| `/emotion` | 情感仪表盘 |
+| `/memories` | 记忆浏览 |
+| `/anchors` | 灵魂锚点 |
+| `/inject <内容>` | 手动注入记忆 |
+| `/quit` | 退出休眠 |
+| `/help` | 命令列表 |
 
 ## 架构
 

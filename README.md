@@ -47,12 +47,53 @@ Project Echo/
 ## 快速开始
 
 ```bash
-# 1. 启动 llama-server（Gemma 4 12B QAT + 禁用推理加速）
+# 一键启动（Windows PowerShell）
+.\start.ps1
+
+# 或手动启动：
+# 1. 启动 llama-server
 llama-server -m <模型路径> --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --reasoning off
 
-# 2. 启动回响
+# 2. 安装 + 启动回响
 pip install -e .
 python -m echo.cli
+```
+
+## 常用命令
+
+### 启动与运行
+
+```bash
+# 聊天模式（默认）
+python -m echo.cli
+
+# 探索模式 —— 回响自主搜索、学习、思考，不参与对话
+python -m echo.cli --explore                          # 每10分钟，自主选话题
+python -m echo.cli --explore --topic "量子计算,AI"    # 指定话题（逗号分隔）
+python -m echo.cli --explore --interval 5             # 每5分钟探索一次
+python -m echo.cli --explore --rounds 10              # 探索10轮后自动停止
+
+# 指定数据库
+python -m echo.cli --db my_memory.db
+```
+
+### 对话内命令
+
+| 命令 | 作用 |
+|---|---|
+| `/status` | 完整内部状态（记忆数、心情、锚点、后端） |
+| `/emotion` | 情感仪表盘（愉悦度 × 唤醒度） |
+| `/memories` | 记忆浏览（按优先级排序，来源标记） |
+| `/anchors` | 灵魂锚点（18 个，已形成/未形成） |
+| `/inject <内容>` | 手动注入一条记忆 |
+| `/quit` | 退出休眠（触发反思、学习、压缩） |
+| `/help` | 显示命令列表 |
+
+### 开发
+
+```bash
+pip install -e .                    # 安装（开发模式）
+python -m pytest tests/ -v          # 运行 31 个测试
 ```
 
 ## 技术栈
