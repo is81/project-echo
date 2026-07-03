@@ -166,7 +166,7 @@ class Echo:
             )
             if updated > 0:
                 import sys
-                print(f"  🪞 更新了 {updated} 个自我认知锚点", file=sys.stderr)
+                print(f"  [反思] 更新了 {updated} 个自我认知锚点", file=sys.stderr)
             # 模式结晶
             pattern = self.crystallizer.crystalize_patterns(recent, self.llm)
             if pattern:
@@ -180,7 +180,7 @@ class Echo:
                 pattern_mem.compute_priority()
                 self.memory.insert(pattern_mem)
                 import sys
-                print(f"  💎 发现新模式: {pattern[:80]}...", file=sys.stderr)
+                print(f"  [模式] 发现新模式: {pattern[:80]}...", file=sys.stderr)
             # 更新自我画像
             if self.anchors.list_formed():
                 self._self_portrait = self.crystallizer.generate_self_portrait(
@@ -194,7 +194,7 @@ class Echo:
             compressed = compress_memories(self)
             if compressed > 0:
                 import sys
-                print(f"  💤 压缩了 {compressed} 条旧记忆", file=sys.stderr)
+                print(f"  [压缩] 压缩了 {compressed} 条旧记忆", file=sys.stderr)
         except Exception:
             pass
 
@@ -203,7 +203,7 @@ class Echo:
             forgotten = self.memory.forget_low_priority()
             if forgotten > 0:
                 import sys
-                print(f"  🧹 遗忘了 {forgotten} 条低优先级记忆", file=sys.stderr)
+                print(f"  [遗忘] 遗忘了 {forgotten} 条低优先级记忆", file=sys.stderr)
         except Exception:
             pass
 
@@ -378,7 +378,7 @@ class Echo:
                     tool_args = tc["arguments"]
                     tool_calls_made.append(tool_name)
 
-                    yield f"\n  🔧 {tool_name}\n"
+                    yield f"\n  [+]{tool_name}\n"
 
                     # 执行工具
                     result = tool_registry.execute(tool_name, tool_args)
@@ -428,7 +428,7 @@ class Echo:
         # 主动行为：~5% 概率回响主动发起
         initiative = self.maybe_initiate()
         if initiative:
-            yield f"\n\n💭 回响主动说：{initiative}"
+            yield f"\n\n[*] 回响主动说：{initiative}"
 
     # --- 记忆检索 ---
 

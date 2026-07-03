@@ -22,7 +22,7 @@ from echo.agent.core import Echo
 
 console = Console()
 
-# ── 颜色 ──────────────────────────────────────────────
+# -- 颜色 ----------------------------------------------
 
 C_USER  = "bright_cyan"
 C_ECHO  = "magenta"
@@ -34,27 +34,27 @@ C_TOOL  = "bright_blue"
 C_META  = "grey50"
 
 MOOD_STYLES = {
-    "兴奋的": ("bright_yellow", "✨"),
-    "平静愉悦的": ("bright_green", "😌"),
-    "焦躁的": ("bright_red", "😤"),
-    "低落的": ("blue", "😔"),
-    "警觉的": ("bright_yellow", "🧐"),
-    "平和的": ("bright_cyan", "🧘"),
+    "兴奋的": ("bright_yellow", "*"),
+    "平静愉悦的": ("bright_green", "=)"),
+    "焦躁的": ("bright_red", "!?"),
+    "低落的": ("blue", "..."),
+    "警觉的": ("bright_yellow", "~"),
+    "平和的": ("bright_cyan", "~"),
 }
 
 SRC_ICONS = {
-    "birth": "🏠", "interaction": "💬", "reflection": "🪞",
-    "world_event": "🌍", "summary": "📝",
-    "imagination": "💡", "initiative": "💭",
+    "birth": "[根]", "interaction": "[话]", "reflection": "[省]",
+    "world_event": "[世]", "summary": "[摘]",
+    "imagination": "[想]", "initiative": "[主]",
 }
 
 
-# ── 小工具 ────────────────────────────────────────────
+# -- 小工具 --------------------------------------------
 
 def _bar(val: float, lo: float, hi: float, width: int = 16,
          neg: str = C_WARN, mid: str = C_DIM, pos: str = "bright_green") -> Text:
     r = (val - lo) / (hi - lo); p = max(0, min(width, int(r * width)))
-    t = Text(); t.append("━" * p, style=pos); t.append("─" * (width - p), style=mid)
+    t = Text(); t.append("=" * p, style=pos); t.append("-" * (width - p), style=mid)
     return t
 
 def _mood(m: str) -> Text:
@@ -62,10 +62,10 @@ def _mood(m: str) -> Text:
     return Text(f"{e} {m}", style=f"bold {c}")
 
 def _dot(s: float) -> Text:
-    return Text("●", style="bright_green" if s >= 0.6 else "bright_yellow" if s >= 0.3 else C_DIM)
+    return Text("*", style="bright_green" if s >= 0.6 else "bright_yellow" if s >= 0.3 else C_DIM)
 
 
-# ── 聊天气泡（简洁版）─────────────────────────────────
+# -- 聊天气泡（简洁版）---------------------------------
 
 def _chat_echo(echo: Echo, text: str, tools: list[str]) -> None:
     """回响消息：左对齐，心情前缀."""
@@ -74,7 +74,7 @@ def _chat_echo(echo: Echo, text: str, tools: list[str]) -> None:
     prefix.append(f"{me} ", style=mc)
     prefix.append("回响", style=f"bold {C_ECHO}")
     if tools:
-        prefix.append(f"  🔧{' '.join(tools)}", style=C_TOOL)
+        prefix.append(f"  [+]{' '.join(tools)}", style=C_TOOL)
 
     console.print()
     console.print(prefix)
@@ -83,7 +83,7 @@ def _chat_echo(echo: Echo, text: str, tools: list[str]) -> None:
             console.print(f"     {line}", style="white")
 
 
-# ── 欢迎 ──────────────────────────────────────────────
+# -- 欢迎 ----------------------------------------------
 
 def _welcome(echo: Echo) -> None:
     birth = echo.memory.get_birth()
@@ -101,7 +101,7 @@ def _welcome(echo: Echo) -> None:
     console.print(Panel(t, border_style=C_DIM, box=box.SIMPLE, padding=(1, 2)))
 
 
-# ── 命令面板 ──────────────────────────────────────────
+# -- 命令面板 ------------------------------------------
 
 def _help_panel() -> Panel:
     t = Table(box=None, show_header=False, padding=(0, 2))
@@ -121,7 +121,7 @@ def _status_view(echo: Echo) -> None:
     left.add_column("k", style=C_DIM, width=10); left.add_column("v", style="white")
     left.add_row("出生铭文", Text(s["birth_inscription"], style=C_BIRTH))
     left.add_row("锚点", f"{s['anchors_formed']}/{s['anchors_total']} 已形成")
-    left.add_row("后端", {"llama-server": "🖥️ Gemma 4", "api": "☁️ API", "none": "❌"}.get(
+    left.add_row("后端", {"llama-server": "[=] Gemma 4", "api": "[~] API", "none": "[X]"}.get(
         s.get("llm_status", {}).get("active_model", ""), "?"))
 
     right = Table(box=None, show_header=False, padding=(0, 1))
@@ -156,11 +156,11 @@ def _memories_view(echo: Echo) -> None:
     t.add_column(""); t.add_column("来源", style=C_DIM, width=8)
     t.add_column("内容", max_width=52); t.add_column("P", justify="right", width=4)
     if birth:
-        t.add_row("", "🏠 铭文", Text(birth.content[:52], style=C_BIRTH), Text("∞", style=C_BIRTH))
+        t.add_row("", "[根] 铭文", Text(birth.content[:52], style=C_BIRTH), Text("inf", style=C_BIRTH))
     for m in active:
         if birth and m.id == birth.id: continue
         t.add_row(_dot(m.priority_score), f"{SRC_ICONS.get(m.source,'?')} {m.source[:6]}",
-                  m.content[:52] + ("…" if len(m.content) > 52 else ""),
+                  m.content[:52] + ("..." if len(m.content) > 52 else ""),
                   Text(f"{m.priority_score:.2f}", style=C_DIM))
     console.print(Panel(t, border_style=C_DIM, box=box.SIMPLE, padding=(0,1)))
 
@@ -172,24 +172,24 @@ def _anchors_view(echo: Echo) -> None:
     t.add_column("答案", style=C_ACCENT, max_width=30); t.add_column("确信", justify="right", width=4)
     for a in formed:
         t.add_row({"identity":"身份","values":"价值","cognition":"认知","relationships":"关系"}.get(a.category,a.category),
-                  a.question, a.answer[:30]+("…" if len(a.answer)>30 else ""),
+                  a.question, a.answer[:30]+("..." if len(a.answer)>30 else ""),
                   Text(f"{a.confidence:.0%}", style="green" if a.confidence>=0.6 else "yellow"))
     if unformed and len(unformed) <= 4:
         t.add_section()
         for a in unformed[:4]:
             t.add_row({"identity":"身份","values":"价值","cognition":"认知","relationships":"关系"}.get(a.category,a.category),
-                      Text(a.question, style=C_DIM), Text("…", style=C_DIM), Text("—", style=C_DIM))
+                      Text(a.question, style=C_DIM), Text("...", style=C_DIM), Text("—", style=C_DIM))
     console.print(Panel(t, border_style=C_ECHO, box=box.SIMPLE, padding=(0,1)))
 
 
-# ── 主循环 ────────────────────────────────────────────
+# -- 主循环 --------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="回响计划 · Project Echo CLI")
     parser.add_argument("--db", default="echo_memory.db")
     args = parser.parse_args()
 
-    with console.status("[bright_yellow]唤醒 …[/]", spinner="dots"):
+    with console.status("[bright_yellow]唤醒 ...[/]", spinner="dots"):
         echo = Echo()
         echo.wake(db_path=args.db)
 
@@ -198,7 +198,7 @@ def main():
     try:
         while True:
             mc, _ = MOOD_STYLES.get(echo.emotion.mood_label, ("white", ""))
-            prompt = Text(); prompt.append("▸ ", style=mc); prompt.append("你 ", style=f"bold {C_USER}")
+            prompt = Text(); prompt.append("> ", style=mc); prompt.append("你 ", style=f"bold {C_USER}")
             user_input = console.input(prompt).strip()
             if not user_input: continue
 
@@ -216,7 +216,7 @@ def main():
                     c = user_input[len("/inject "):].strip()
                     if c:
                         echo.inject_memory(c)
-                        console.print(f"  [green]✓[/] 已注入")
+                        console.print(f"  [green]OK[/] 已注入")
                     else: console.print(f"  [{C_WARN}]用法: /inject <内容>[/]")
                 else: console.print(f"  [{C_WARN}]未知命令。[/] /help")
                 continue
@@ -225,11 +225,11 @@ def main():
             console.print()  # 空行
             full_text = ""; tools = []; initiative = None
             for token in echo.respond_stream(user_input):
-                if token.startswith("\n  🔧"):
-                    tools.append(token.strip().replace("🔧 ", "")); continue
+                if token.startswith("\n  [+]"):
+                    tools.append(token.strip().replace("[+] ", "")); continue
                 if token.startswith("\n  [") and "·" in token: continue
-                if token.startswith("\n\n💭 回响主动说："):
-                    initiative = token.replace("\n\n💭 回响主动说：", ""); continue
+                if token.startswith("\n\n[*] 回响主动说："):
+                    initiative = token.replace("\n\n[*] 回响主动说：", ""); continue
                 full_text += token
             _chat_echo(echo, full_text, tools)
             if initiative:
@@ -241,7 +241,7 @@ def main():
     except EOFError:
         pass
     finally:
-        with console.status("[dim]整理记忆 …[/]", spinner="dots"):
+        with console.status("[dim]整理记忆 ...[/]", spinner="dots"):
             echo.sleep()
         console.print("[dim]退出[/]")
 

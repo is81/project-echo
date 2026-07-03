@@ -82,7 +82,7 @@ def _search_web(query: str, max_results: int = 5) -> str:
         with DDGS() as ddgs:
             for r in ddgs.text(query, max_results=max_results):
                 body = r['body'][:200]
-                results.append(f"📌 {r['title']}\n   {body}\n   🔗 {r['href']}")
+                results.append(f"- {r['title']}\n   {body}\n   -> {r['href']}")
         if not results:
             return f"未找到关于「{query}」的搜索结果。"
         return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
@@ -104,7 +104,7 @@ def _read_file(path: str) -> str:
         return f"文件不存在: {path}"
     if p.is_dir():
         return f"这是一个目录，不是文件: {path}\n内容:\n" + "\n".join(
-            f"  {'📁' if x.is_dir() else '📄'} {x.name}" for x in sorted(p.iterdir())[:50]
+            f"  {'[DIR]' if x.is_dir() else '[FILE]'} {x.name}" for x in sorted(p.iterdir())[:50]
         )
     try:
         content = p.read_text(encoding="utf-8")
