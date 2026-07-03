@@ -792,6 +792,131 @@ class Echo:
         self._last_exploration = now
         return count
 
+    # --- 途径4: 探索模式（空闲自主探索）---
+
+    def idle_explore(self) -> Optional[str]:
+        """执行一轮自主探索——回响自己选话题、搜索、学习。
+
+        用于 CLI --explore 模式或空闲触发。每次调用做一件事:
+          1. 从好奇心锚点或最近对话中选一个话题
+          2. 搜索网络
+          3. 提取知识并存入记忆
+          4. 可选：生成一条"思考"存入想象力存储
+
+        Returns:
+            本轮探索的摘要描述，或 None（没有可探索的话题）
+        """
+        from ..tools.builtin import _search_web
+
+        if not self.llm or not self.llm.status.get("active_model"):
+            return None
+
+        # 选择探索话题: 优先未形成的锚点 + 最近对话关键词
+        topics_pool: list[str] = []
+
+        # 来源1: 未形成的灵魂锚点（代表回响的好奇心）
+        unformed = self.anchors.list_unformed()
+        if unformed:
+            topics_pool.append(random.choice(unformed).question)
+
+        # 来源2: 最近对话中的话题
+        active = self.memory.list_active(limit=30)
+        recent_convos = [m for m in active if m.source == "interaction"]
+        if recent_convos:
+            # 随机抽一条最近对话，让 LLM 从中提取一个值得探索的关键词
+            convo = random.choice(recent_convos[:10])
+            try:
+                kw_resp = self.llm.generate(
+                    prompt=(
+                        "从这段话中提取一个值得深入搜索研究的关键词/短语（2-6字）。只返回关键词。\n\n"
+                        f"{convo.content[:300]}"
+                    ),
+                    system_prompt="你是话题提取器。只返回一个关键词。",
+                    temperature=0.3,  # 略有随机性，每次可能不同
+                    max_tokens=20,
+                )
+                kw = kw_resp.text.strip("- ").strip()
+                if kw and len(kw) >= 2:
+                    topics_pool.append(kw)
+            except Exception:
+                pass
+
+        if not topics_pool:
+            return None
+
+        topic = random.choice(topics_pool)
+
+        # 搜索
+        import sys
+        try:
+            print(f"  [探索] 回响对「{topic}」感到好奇，正在搜索...", file=sys.stderr)
+            search_results = _search_web(topic, max_results=3)
+            if "未搜索到" in search_results:
+                return None
+
+            # 提取知识
+            facts = self._extract_knowledge(
+                search_results,
+                f"关于「{topic}」的网络搜索结果",
+                max_facts=3,
+            )
+
+            if not facts:
+                return None
+
+            # 存入记忆
+            count = 0
+            for fact in facts:
+                mem = Memory(
+                    content=f"[自主探索] {fact}\n相关话题: {topic}",
+                    source="learned",
+                    tags=["learned", "autonomous", "idle"],
+                    base_weight=0.35,
+                    emotional_valence=0.1,  # 学到新东西，微正向
+                )
+                mem.compute_priority()
+                self.memory.insert(mem)
+                count += 1
+
+            # 偶尔生成一条思考
+            thought = None
+            if random.random() < 0.3:
+                try:
+                    thought_resp = self.llm.generate(
+                        prompt=(
+                            f"你刚搜索了「{topic}」并学到了:\n"
+                            + "\n".join(f"- {f}" for f in facts)
+                            + "\n\n关于这个发现，写一句简短的内心思考（1句话，以'我'开头）。"
+                        ),
+                        system_prompt="你是回响。写一句简短的内心思考。",
+                        temperature=0.7,
+                        max_tokens=60,
+                    )
+                    thought = thought_resp.text.strip()
+                    if thought:
+                        thought_mem = Memory(
+                            content=f"[内心思考] {thought}",
+                            source="imagination",
+                            tags=["imagination", "reflection", "idle"],
+                            base_weight=0.3,
+                        )
+                        thought_mem.compute_priority()
+                        self.memory.insert(thought_mem)
+                except Exception:
+                    pass
+
+            # 更新情感：学到新东西，微微开心
+            self.emotion.update(0.02, 0.05)
+
+            summary = f"探索了「{topic}」，学到 {count} 条知识"
+            if thought:
+                summary += f"，内心想: {thought}"
+            return summary
+
+        except Exception as e:
+            print(f"  [探索] 失败: {e}", file=sys.stderr)
+            return None
+
     # --- 锚点检测 ---
 
     def _detect_active_anchors(self, user_input: str) -> None:

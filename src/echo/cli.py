@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -183,16 +184,84 @@ def _anchors_view(echo: Echo) -> None:
     console.print(Panel(t, border_style=C_ECHO, box=box.SIMPLE, padding=(0,1)))
 
 
+# -- 探索模式 ------------------------------------------
+
+def _run_explore_mode(echo, interval_min: int = 10, max_rounds: int = 0) -> None:
+    """探索模式：回响自主选择话题、搜索、学习、思考。
+
+    不参与对话，自己在网络上游荡，把学到的东西存入记忆。
+    直到 Ctrl+C 或达到指定轮数。
+    """
+    import time
+
+    console.print(Panel(
+        Text(f"探索模式 · 每 {interval_min} 分钟探索一个话题\n"
+             f"回响会自己选话题、搜索、学习、存入记忆\n"
+             f"按 Ctrl+C 退出", style=C_DIM),
+        border_style=C_ACCENT, box=box.SIMPLE, padding=(1, 2),
+    ))
+
+    _welcome(echo)
+
+    round_num = 0
+    try:
+        while True:
+            round_num += 1
+            if max_rounds > 0 and round_num > max_rounds:
+                break
+
+            # 分隔线
+            t = Text()
+            t.append(f"── 第 {round_num} 轮探索 ", style=C_DIM)
+            t.append(datetime.now().strftime("%H:%M:%S"), style=C_META)
+            if max_rounds > 0:
+                t.append(f" /{max_rounds}", style=C_META)
+            t.append(" ──", style=C_DIM)
+            console.print()
+            console.print(t)
+
+            # 执行探索
+            result = echo.idle_explore()
+            if result:
+                console.print(f"  [green]=)[/] {result}", style="white")
+            else:
+                console.print(f"  [yellow]~[/] 没有找到可探索的话题，等待下一轮...", style=C_DIM)
+
+            # 等待下一轮
+            console.print(f"  [dim]下次探索: {interval_min} 分钟后[/]", style=C_META)
+            try:
+                time.sleep(interval_min * 60)
+            except KeyboardInterrupt:
+                break
+
+    except KeyboardInterrupt:
+        console.print()
+    finally:
+        with console.status("[dim]整理记忆 ...[/]", spinner="dots"):
+            echo.sleep()
+        console.print(f"[dim]探索 {round_num} 轮后退出[/]")
+
 # -- 主循环 --------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="回响计划 · Project Echo CLI")
     parser.add_argument("--db", default="echo_memory.db")
+    parser.add_argument("--explore", action="store_true",
+                       help="探索模式：回响自主搜索、学习、思考（不交互）")
+    parser.add_argument("--interval", type=int, default=10,
+                       help="探索间隔（分钟），默认 10")
+    parser.add_argument("--rounds", type=int, default=0,
+                       help="探索轮数（0=无限循环）")
     args = parser.parse_args()
 
     with console.status("[bright_yellow]唤醒 ...[/]", spinner="dots"):
         echo = Echo()
         echo.wake(db_path=args.db)
+
+    # ── 探索模式 ──
+    if args.explore:
+        _run_explore_mode(echo, interval_min=args.interval, max_rounds=args.rounds)
+        return
 
     _welcome(echo)
 
