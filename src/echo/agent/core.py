@@ -341,8 +341,9 @@ class Echo:
         tools = tool_registry.to_openai_tools()
 
         # ── 工具调用循环 ──
-        MAX_TOOL_ROUNDS = 3
+        MAX_TOOL_ROUNDS = 2  # 减少到 2 轮，避免重复搜索
         tool_calls_made: list[str] = []
+        called_tools: set[str] = set()  # 本轮已调用的工具
         final_text = ""
 
         for _round in range(MAX_TOOL_ROUNDS):
@@ -376,6 +377,11 @@ class Echo:
                 for tc in response.tool_calls:
                     tool_name = tc["name"]
                     tool_args = tc["arguments"]
+
+                    # 防重复：同一工具本轮只调用一次
+                    if tool_name in called_tools:
+                        continue
+                    called_tools.add(tool_name)
                     tool_calls_made.append(tool_name)
 
                     yield f"\n  [+]{tool_name}\n"

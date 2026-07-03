@@ -171,7 +171,7 @@ def _search_web(query: str, max_results: int = 5) -> str:
         pass
 
     # 全部失败
-    return f"搜索暂时不可用：当前网络无法访问 DuckDuckGo / Bing / 百度。请检查网络连接。"
+    return f"未搜索到关于「{query}」的结果。请尝试更具体的关键词（如加上年份、地点等），或换个角度重新搜索。"
 
 
 # ── 文件操作 ──────────────────────────────────────────
