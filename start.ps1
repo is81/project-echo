@@ -1,6 +1,10 @@
 # 回响计划 · 启动脚本 (PowerShell)
 # 自动启动 llama-server + Echo CLI
 
+# 修复中文乱码
+chcp 65001 > $null
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+
 $MODEL = "E:\Models\gemma\gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
 $LLAMA = "D:\llama-b9568-bin-win-cuda-12.4-x64\llama-server.exe"
 $PORT = 8080
