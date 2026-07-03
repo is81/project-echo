@@ -794,14 +794,17 @@ class Echo:
 
     # --- 途径4: 探索模式（空闲自主探索）---
 
-    def idle_explore(self) -> Optional[str]:
+    def idle_explore(self, topic: Optional[str] = None) -> Optional[str]:
         """执行一轮自主探索——回响自己选话题、搜索、学习。
 
         用于 CLI --explore 模式或空闲触发。每次调用做一件事:
-          1. 从好奇心锚点或最近对话中选一个话题
+          1. 从好奇心锚点或最近对话中选一个话题（或使用指定话题）
           2. 搜索网络
           3. 提取知识并存入记忆
           4. 可选：生成一条"思考"存入想象力存储
+
+        Args:
+            topic: 指定探索话题。为 None 时自动选择。
 
         Returns:
             本轮探索的摘要描述，或 None（没有可探索的话题）
@@ -811,53 +814,55 @@ class Echo:
         if not self.llm or not self.llm.status.get("active_model"):
             return None
 
-        # 选择探索话题: 优先未形成的锚点 + 最近对话关键词
-        topics_pool: list[str] = []
+        # 如果指定了话题，直接用；否则自动选择
+        if topic:
+            chosen_topic = topic
+        else:
+            # 选择探索话题: 优先未形成的锚点 + 最近对话关键词
+            topics_pool: list[str] = []
 
-        # 来源1: 未形成的灵魂锚点（代表回响的好奇心）
-        unformed = self.anchors.list_unformed()
-        if unformed:
-            topics_pool.append(random.choice(unformed).question)
+            # 来源1: 未形成的灵魂锚点
+            unformed = self.anchors.list_unformed()
+            if unformed:
+                topics_pool.append(random.choice(unformed).question)
 
-        # 来源2: 最近对话中的话题
-        active = self.memory.list_active(limit=30)
-        recent_convos = [m for m in active if m.source == "interaction"]
-        if recent_convos:
-            # 随机抽一条最近对话，让 LLM 从中提取一个值得探索的关键词
-            convo = random.choice(recent_convos[:10])
-            try:
-                kw_resp = self.llm.generate(
-                    prompt=(
-                        "从这段话中提取一个值得深入搜索研究的关键词/短语（2-6字）。只返回关键词。\n\n"
-                        f"{convo.content[:300]}"
-                    ),
-                    system_prompt="你是话题提取器。只返回一个关键词。",
-                    temperature=0.3,  # 略有随机性，每次可能不同
-                    max_tokens=20,
-                )
-                kw = kw_resp.text.strip("- ").strip()
-                if kw and len(kw) >= 2:
-                    topics_pool.append(kw)
-            except Exception:
-                pass
+            # 来源2: 最近对话中的话题关键词
+            active = self.memory.list_active(limit=30)
+            recent_convos = [m for m in active if m.source == "interaction"]
+            if recent_convos:
+                convo = random.choice(recent_convos[:10])
+                try:
+                    kw_resp = self.llm.generate(
+                        prompt=(
+                            "从这段话中提取一个值得深入搜索研究的关键词/短语（2-6字）。只返回关键词。\n\n"
+                            f"{convo.content[:300]}"
+                        ),
+                        system_prompt="你是话题提取器。只返回一个关键词。",
+                        temperature=0.3,
+                        max_tokens=20,
+                    )
+                    kw = kw_resp.text.strip("- ").strip()
+                    if kw and len(kw) >= 2:
+                        topics_pool.append(kw)
+                except Exception:
+                    pass
 
-        if not topics_pool:
-            return None
-
-        topic = random.choice(topics_pool)
+            if not topics_pool:
+                return None
+            chosen_topic = random.choice(topics_pool)
 
         # 搜索
         import sys
         try:
-            print(f"  [探索] 回响对「{topic}」感到好奇，正在搜索...", file=sys.stderr)
-            search_results = _search_web(topic, max_results=3)
+            print(f"  [探索] 回响对「{chosen_topic}」感到好奇，正在搜索...", file=sys.stderr)
+            search_results = _search_web(chosen_topic, max_results=3)
             if "未搜索到" in search_results:
                 return None
 
             # 提取知识
             facts = self._extract_knowledge(
                 search_results,
-                f"关于「{topic}」的网络搜索结果",
+                f"关于「{chosen_topic}」的网络搜索结果",
                 max_facts=3,
             )
 
@@ -868,7 +873,7 @@ class Echo:
             count = 0
             for fact in facts:
                 mem = Memory(
-                    content=f"[自主探索] {fact}\n相关话题: {topic}",
+                    content=f"[自主探索] {fact}\n相关话题: {chosen_topic}",
                     source="learned",
                     tags=["learned", "autonomous", "idle"],
                     base_weight=0.35,
@@ -884,7 +889,7 @@ class Echo:
                 try:
                     thought_resp = self.llm.generate(
                         prompt=(
-                            f"你刚搜索了「{topic}」并学到了:\n"
+                            f"你刚搜索了「{chosen_topic}」并学到了:\n"
                             + "\n".join(f"- {f}" for f in facts)
                             + "\n\n关于这个发现，写一句简短的内心思考（1句话，以'我'开头）。"
                         ),
@@ -908,7 +913,7 @@ class Echo:
             # 更新情感：学到新东西，微微开心
             self.emotion.update(0.02, 0.05)
 
-            summary = f"探索了「{topic}」，学到 {count} 条知识"
+            summary = f"探索了「{chosen_topic}」，学到 {count} 条知识"
             if thought:
                 summary += f"，内心想: {thought}"
             return summary

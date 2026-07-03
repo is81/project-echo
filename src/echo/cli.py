@@ -186,23 +186,34 @@ def _anchors_view(echo: Echo) -> None:
 
 # -- 探索模式 ------------------------------------------
 
-def _run_explore_mode(echo, interval_min: int = 10, max_rounds: int = 0) -> None:
+def _run_explore_mode(echo, interval_min: int = 10, max_rounds: int = 0,
+                     topics: list[str] | None = None) -> None:
     """探索模式：回响自主选择话题、搜索、学习、思考。
 
     不参与对话，自己在网络上游荡，把学到的东西存入记忆。
     直到 Ctrl+C 或达到指定轮数。
+
+    Args:
+        topics: 可选，指定探索话题列表。为空时回响自己选。
     """
     import time
 
-    console.print(Panel(
-        Text(f"探索模式 · 每 {interval_min} 分钟探索一个话题\n"
-             f"回响会自己选话题、搜索、学习、存入记忆\n"
-             f"按 Ctrl+C 退出", style=C_DIM),
-        border_style=C_ACCENT, box=box.SIMPLE, padding=(1, 2),
-    ))
+    topics = topics or []
+    topic_mode = "指定话题" if topics else "自主选择"
+    desc = (
+        f"探索模式 · 每 {interval_min} 分钟探索一个话题 · {topic_mode}\n"
+        f"回响会搜索、学习、存入记忆"
+    )
+    if topics:
+        desc += f"\n话题列表: {', '.join(topics)}"
+    desc += "\n按 Ctrl+C 退出"
+
+    console.print(Panel(Text(desc, style=C_DIM),
+                 border_style=C_ACCENT, box=box.SIMPLE, padding=(1, 2)))
 
     _welcome(echo)
 
+    topic_idx = 0  # 指定话题时的游标
     round_num = 0
     try:
         while True:
@@ -220,12 +231,19 @@ def _run_explore_mode(echo, interval_min: int = 10, max_rounds: int = 0) -> None
             console.print()
             console.print(t)
 
+            # 确定本轮话题
+            current_topic = None
+            if topics:
+                current_topic = topics[topic_idx % len(topics)]
+                topic_idx += 1
+                console.print(f"  [dim]话题: {current_topic}[/]", style=C_DIM)
+
             # 执行探索
-            result = echo.idle_explore()
+            result = echo.idle_explore(topic=current_topic)
             if result:
                 console.print(f"  [green]=)[/] {result}", style="white")
             else:
-                console.print(f"  [yellow]~[/] 没有找到可探索的话题，等待下一轮...", style=C_DIM)
+                console.print(f"  [yellow]~[/] 没有结果，等待下一轮...", style=C_DIM)
 
             # 等待下一轮
             console.print(f"  [dim]下次探索: {interval_min} 分钟后[/]", style=C_META)
@@ -252,7 +270,14 @@ def main():
                        help="探索间隔（分钟），默认 10")
     parser.add_argument("--rounds", type=int, default=0,
                        help="探索轮数（0=无限循环）")
+    parser.add_argument("--topic", type=str, default="",
+                       help="指定探索话题（逗号分隔多个），如: --topic \"量子计算,AI意识\"")
     args = parser.parse_args()
+
+    # 解析话题列表
+    topics_list: list[str] = []
+    if args.topic:
+        topics_list = [t.strip() for t in args.topic.split(",") if t.strip()]
 
     with console.status("[bright_yellow]唤醒 ...[/]", spinner="dots"):
         echo = Echo()
@@ -260,7 +285,8 @@ def main():
 
     # ── 探索模式 ──
     if args.explore:
-        _run_explore_mode(echo, interval_min=args.interval, max_rounds=args.rounds)
+        _run_explore_mode(echo, interval_min=args.interval,
+                         max_rounds=args.rounds, topics=topics_list)
         return
 
     _welcome(echo)
