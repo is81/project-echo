@@ -115,6 +115,7 @@ class Echo:
     _history: list[dict] = field(default_factory=list)
     _session_start: float = field(default_factory=lambda: time.time())
     _interaction_count: int = 0
+    _last_exploration: float = 0.0  # 上次自主探索时间戳
     _birth_inscription: str = ""
     _principles: list[dict] = field(default_factory=list)
     _core_memories: list[Memory] = field(default_factory=list)  # 预加载的核心记忆
@@ -712,12 +713,19 @@ class Echo:
     def _explore_and_learn(self) -> int:
         """识别当天讨论的核心话题，自主搜索延伸阅读并学习。sleep() 时调用。
 
-        模拟人类"睡前查一下今天聊到的东西"的行为——回响围绕今天的话题，
-        自己去搜一下了解更多，然后记住。
+        保护机制（防止退出卡顿）:
+          - 冷却期 8 小时：两次探索之间至少间隔 8 小时
+          - 最多 2 个话题：减少搜索次数
+          - 如果 30 秒还没完成，放弃剩余话题
         """
+        now = time.time()
+        # 冷却期：8 小时内不重复探索
+        if now - self._last_exploration < 8 * 3600:
+            return 0
+
         from ..tools.builtin import _search_web
 
-        today_start = time.time() - 24 * 3600
+        today_start = now - 24 * 3600
         all_active = self.memory.list_active(limit=100)
         recent = [
             m for m in all_active
@@ -726,34 +734,38 @@ class Echo:
         if len(recent) < 3:
             return 0
 
-        # 步骤1: 识别今天核心话题
+        # 步骤1: 识别今天核心话题（最多 2 个）
         convo_text = "\n".join(m.content[:200] for m in recent[:15])
         topics: list[str] = []
         try:
             topic_resp = self.llm.generate(
                 prompt=(
-                    "以下对话讨论了哪些核心话题？每行输出一个关键词/短语（2-6字），最多3个话题:\n\n"
+                    "以下对话讨论了哪些核心话题？每行输出一个关键词/短语（2-6字），最多2个话题:\n\n"
                     f"{convo_text[:1500]}"
                 ),
                 system_prompt="你是话题识别器。每行一个话题关键词，不要解释。",
                 temperature=0.1,
-                max_tokens=60,
+                max_tokens=40,
             )
             for line in topic_resp.text.strip().split("\n"):
                 t = line.strip("- ").strip()
                 if t and len(t) >= 2:
                     topics.append(t)
-            topics = topics[:3]
+            topics = topics[:2]
         except Exception:
             return 0
 
         if not topics:
+            self._last_exploration = now
             return 0
 
-        # 步骤2: 每个话题搜索 + 提取知识
+        # 步骤2: 每个话题搜索 + 提取知识（30 秒总超时）
         import sys
+        deadline = now + 30
         count = 0
         for topic in topics:
+            if time.time() > deadline:
+                break
             try:
                 print(f"  [探索] 搜索: {topic}...", file=sys.stderr)
                 search_results = _search_web(topic, max_results=3)
@@ -762,7 +774,7 @@ class Echo:
                 facts = self._extract_knowledge(
                     search_results,
                     f"关于「{topic}」的网络搜索结果",
-                    max_facts=3,
+                    max_facts=2,
                 )
                 for fact in facts:
                     mem = Memory(
@@ -776,6 +788,8 @@ class Echo:
                     count += 1
             except Exception:
                 continue
+
+        self._last_exploration = now
         return count
 
     # --- 锚点检测 ---
