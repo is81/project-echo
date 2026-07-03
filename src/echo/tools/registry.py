@@ -41,8 +41,17 @@ class Tool:
             },
         }
 
-    def execute(self, **kwargs) -> str:
-        """执行工具并返回字符串结果."""
+    def execute(self, confirm_func=None, **kwargs) -> str:
+        """执行工具并返回字符串结果.
+
+        Args:
+            confirm_func: 可选确认回调，签名为 (tool_name, details) -> bool
+        """
+        # 危险工具需要确认
+        if self.dangerous and confirm_func:
+            details = ", ".join(f"{k}={v}" for k, v in kwargs.items())
+            if not confirm_func(self.name, details):
+                return f"[用户拒绝] 操作「{self.name}」被用户取消。"
         try:
             result = self.func(**kwargs)
             return str(result)
@@ -72,12 +81,18 @@ class ToolRegistry:
         """生成 OpenAI 兼容的 tools 参数."""
         return [t.to_openai_schema() for t in self._tools.values()]
 
-    def execute(self, name: str, arguments: dict) -> str:
-        """执行指定工具并返回结果."""
+    def execute(self, name: str, arguments: dict, confirm_func=None) -> str:
+        """执行指定工具并返回结果.
+
+        Args:
+            name: 工具名称
+            arguments: 参数 dict
+            confirm_func: 可选确认回调
+        """
         tool = self._tools.get(name)
         if tool is None:
             return f"[错误] 未知工具: {name}"
-        return tool.execute(**arguments)
+        return tool.execute(confirm_func=confirm_func, **arguments)
 
     def __len__(self) -> int:
         return len(self._tools)

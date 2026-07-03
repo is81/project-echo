@@ -290,8 +290,12 @@ class Echo:
             "emotion": self.emotion.to_dict(),
         }
 
-    def respond_stream(self, user_input: str) -> Iterator[str]:
+    def respond_stream(self, user_input: str, confirm_func=None) -> Iterator[str]:
         """流式回应，支持工具调用.
+
+        Args:
+            user_input: 用户输入
+            confirm_func: 可选，危险工具确认回调 (tool_name, details) -> bool
 
         流程:
           1. 检索记忆 + 构建系统提示
@@ -387,7 +391,7 @@ class Echo:
                     yield f"\n  [+]{tool_name}\n"
 
                     # 执行工具
-                    result = tool_registry.execute(tool_name, tool_args)
+                    result = tool_registry.execute(tool_name, tool_args, confirm_func=confirm_func)
                     # 截断过长结果
                     if len(result) > 500:
                         result = result[:500] + "..."

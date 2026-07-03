@@ -223,8 +223,14 @@ def main():
 
             # 对话
             console.print()  # 空行
+
+            # 危险工具确认回调
+            def confirm(tool_name: str, details: str) -> bool:
+                ans = console.input(f"  [yellow]⚠ 回响要执行 [bold]{tool_name}[/]: {details}[/]\n  [dim]允许吗？[y/N] [/]")
+                return ans.strip().lower() in ("y", "yes")
+
             full_text = ""; tools = []; initiative = None
-            for token in echo.respond_stream(user_input):
+            for token in echo.respond_stream(user_input, confirm_func=confirm):
                 if token.startswith("\n  [+]"):
                     tools.append(token.strip().replace("[+] ", "")); continue
                 if token.startswith("\n  [") and "·" in token: continue

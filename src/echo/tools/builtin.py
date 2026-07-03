@@ -234,6 +234,32 @@ def _list_files(path: str = ".") -> str:
     return "\n".join(lines)
 
 
+# ── 终端命令 ──────────────────────────────────────────
+
+def _run_command(command: str) -> str:
+    """在项目根目录执行终端命令."""
+    import subprocess
+    root = Path(__file__).parent.parent.parent.parent
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True,
+            text=True, timeout=30, cwd=str(root),
+            encoding="utf-8", errors="replace",
+        )
+        out = result.stdout.strip()
+        err = result.stderr.strip()
+        parts = []
+        if out:
+            parts.append(out[:2000])
+        if err:
+            parts.append(f"[stderr]\n{err[:500]}")
+        if not parts:
+            parts.append(f"(退出码: {result.returncode})")
+        return "\n".join(parts)
+    except subprocess.TimeoutExpired:
+        return "命令超时（30秒）"
+
+
 # ── 注册 ──────────────────────────────────────────────
 
 def register_builtin_tools(registry, echo_instance) -> None:
@@ -298,6 +324,14 @@ def register_builtin_tools(registry, echo_instance) -> None:
             "content": {"type": "string", "description": "写入内容"},
         },
         func=_write_file,
+        dangerous=True,
+    ))
+
+    registry.register(Tool(
+        name="run_command",
+        description="在项目根目录执行终端命令。用于运行脚本、查看git状态、安装依赖等。",
+        parameters={"command": {"type": "string", "description": "要执行的终端命令"}},
+        func=_run_command,
         dangerous=True,
     ))
 
