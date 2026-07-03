@@ -351,7 +351,7 @@ class Echo:
                 messages=messages,
                 tools=tools,
                 temperature=temperature,
-                max_tokens=120,
+                max_tokens=150,
             )
 
             # 模型决定调用工具

@@ -104,12 +104,12 @@ def _search_web(query: str, max_results: int = 5) -> str:
             title = re.sub(r'<[^>]+>', '', title).strip()
             snippet = re.sub(r'<[^>]+>', '', snippet).strip()
             if title and href.startswith("http"):
-                results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
+                results.append(f"- {title[:120]}\n   {snippet[:150]}\n   {href}")
                 if len(results) >= max_results:
                     break
 
         if results:
-            return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+            return "\n".join(results)
     except Exception:
         pass
 
@@ -138,10 +138,10 @@ def _search_web(query: str, max_results: int = 5) -> str:
             if i < len(snippets):
                 snippet = re.sub(r'<[^>]+>', '', snippets[i]).strip()
                 snippet = re.sub(r'&ensp;|&#0183;|\s+', ' ', snippet).strip()
-            results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
+            results.append(f"- {title[:80]}\n   {snippet[:120]}\n   {href}")
 
         if results:
-            return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+            return "\n".join(results)
     except Exception:
         pass
 
@@ -165,12 +165,12 @@ def _search_web(query: str, max_results: int = 5) -> str:
             title = re.sub(r'<[^>]+>', '', title).strip()
             snippet = re.sub(r'<[^>]+>', '', snippet).strip()
             if title and not title.startswith("<"):
-                results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
+                results.append(f"- {title[:80]}\n   {snippet[:120]}\n   {href}")
                 if len(results) >= max_results:
                     break
 
         if results:
-            return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+            return "\n".join(results)
     except Exception:
         pass
 
