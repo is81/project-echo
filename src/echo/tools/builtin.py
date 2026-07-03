@@ -55,6 +55,29 @@ def _search_memory(query: str, store=None) -> str:
     return "\n".join(matches[:10])
 
 
+# ── 联网搜索 ──────────────────────────────────────────
+
+def _search_web(query: str, max_results: int = 5) -> str:
+    """搜索网络信息，返回摘要和链接."""
+    try:
+        from duckduckgo_search import DDGS
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=max_results):
+                body = r['body'][:200]
+                results.append(f"📌 {r['title']}\n   {body}\n   🔗 {r['href']}")
+        if not results:
+            return f"未找到关于「{query}」的搜索结果。"
+        return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+    except ImportError:
+        return "联网搜索功能未启用。请安装: pip install duckduckgo_search"
+    except Exception as e:
+        msg = str(e)
+        if "timeout" in msg.lower() or "timed out" in msg.lower():
+            return f"搜索超时：网络连接较慢，稍后再试。（{msg[:100]}）"
+        return f"搜索失败: {msg[:200]}"
+
+
 # ── 文件操作 ──────────────────────────────────────────
 
 def _read_file(path: str) -> str:
@@ -141,6 +164,16 @@ def register_builtin_tools(registry, echo_instance) -> None:
         description="搜索自己的记忆库，查找包含特定关键词的历史记忆。",
         parameters={"query": {"type": "string", "description": "要搜索的关键词或短语"}},
         func=lambda query: _search_memory(query, store=echo_instance.memory),
+    ))
+
+    registry.register(Tool(
+        name="search_web",
+        description="搜索网络获取最新信息。当需要了解时事、查找资料、或回答知识性问题时调用。返回标题、摘要和链接。",
+        parameters={
+            "query": {"type": "string", "description": "搜索关键词"},
+            "max_results": {"type": "integer", "description": "最大结果数，默认5"},
+        },
+        func=_search_web,
     ))
 
     registry.register(Tool(
