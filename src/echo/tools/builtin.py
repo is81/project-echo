@@ -237,14 +237,14 @@ def register_builtin_tools(registry, echo_instance) -> None:
 
     registry.register(Tool(
         name="get_time",
-        description="获取当前日期和时间。当需要知道'现在是什么时候'时调用。",
+        description="获取当前日期和时间",
         parameters={},
         func=_get_time,
     ))
 
     registry.register(Tool(
         name="get_status",
-        description="查看自身的当前内部状态：记忆数、心情、情绪值。",
+        description="查看自身状态：记忆数、心情",
         parameters={},
         func=lambda: _get_status(
             memory_count=echo_instance.memory.count(),
@@ -257,41 +257,41 @@ def register_builtin_tools(registry, echo_instance) -> None:
 
     registry.register(Tool(
         name="search_memory",
-        description="搜索自己的记忆库，查找包含特定关键词的历史记忆。",
-        parameters={"query": {"type": "string", "description": "要搜索的关键词或短语"}},
+        description="搜索自己的记忆库",
+        parameters={"query": {"type": "string", "description": "搜索关键词"}},
         func=lambda query: _search_memory(query, store=echo_instance.memory),
     ))
 
     registry.register(Tool(
         name="store_imagination",
-        description="将假设性、未验证的念头或想象存入想象力存储。当你产生一个'可能是什么'的猜想、创意或直觉时调用。这些念头不需要是真实的，它们是你创造力的延伸。",
-        parameters={"thought": {"type": "string", "description": "要存储的念头或想象内容"}},
+        description="存储假设性念头到想象力空间",
+        parameters={"thought": {"type": "string", "description": "念头内容"}},
         func=lambda thought: _store_imagination(thought, store=echo_instance.memory),
     ))
 
     registry.register(Tool(
         name="search_web",
-        description="搜索网络获取最新信息。当需要了解时事、查找资料、或回答知识性问题时调用。返回标题、摘要和链接。",
+        description="搜索网络获取最新信息",
         parameters={
             "query": {"type": "string", "description": "搜索关键词"},
-            "max_results": {"type": "integer", "description": "最大结果数，默认5"},
+            "max_results": {"type": "integer", "description": "最大结果数"},
         },
         func=_search_web,
     ))
 
     registry.register(Tool(
         name="read_file",
-        description="读取项目目录中的文件内容。可以读代码、配置、日志等文本文件。如果是目录则列出内容。",
-        parameters={"path": {"type": "string", "description": "相对于项目根目录的文件路径，如 'README.md' 或 'src/echo/cli.py'"}},
+        description="读取项目目录中的文件",
+        parameters={"path": {"type": "string", "description": "文件路径"}},
         func=_read_file,
     ))
 
     registry.register(Tool(
         name="write_file",
-        description="将内容写入项目目录中的文件。会覆盖已有文件。用于保存笔记、生成代码、记录日志等。",
+        description="写入内容到项目目录中的文件",
         parameters={
-            "path": {"type": "string", "description": "相对于项目根目录的文件路径"},
-            "content": {"type": "string", "description": "要写入的文本内容"},
+            "path": {"type": "string", "description": "文件路径"},
+            "content": {"type": "string", "description": "写入内容"},
         },
         func=_write_file,
         dangerous=True,
@@ -299,7 +299,7 @@ def register_builtin_tools(registry, echo_instance) -> None:
 
     registry.register(Tool(
         name="list_files",
-        description="列出项目目录中的文件和子目录。用于浏览项目结构。",
-        parameters={"path": {"type": "string", "description": "相对于项目根目录的路径，默认为 '.'（根目录）"}},
+        description="列出项目目录中的文件",
+        parameters={"path": {"type": "string", "description": "目录路径"}},
         func=_list_files,
     ))

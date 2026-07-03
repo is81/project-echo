@@ -333,7 +333,7 @@ class Echo:
         # 构建消息列表（用于工具调用上下文）
         messages = [{"role": "system", "content": system_prompt}]
         # 包含最近对话历史（让模型在工具循环中有上下文）
-        for h in self._history[-6:]:
+        for h in self._history[-3:]:
             role = "assistant" if h["role"] == "echo" else h["role"]
             messages.append({"role": role, "content": h["content"]})
         messages.append({"role": "user", "content": user_input})
@@ -350,7 +350,7 @@ class Echo:
                 messages=messages,
                 tools=tools,
                 temperature=temperature,
-                max_tokens=200,
+                max_tokens=120,
             )
 
             # 模型决定调用工具
@@ -500,71 +500,39 @@ class Echo:
     # --- 系统提示构建 ---
 
     def _build_system_prompt(self, memories: list[Memory]) -> str:
-        """构建包含双层意识信息的系统提示."""
-        principles_text = "\n".join(
-            f"- {p['name']}: {p['statement'][:100]}" for p in self._principles
-        )
+        """构建精简系统提示."""
+        # 记忆（最多3条，每条最多120字）
+        mem_parts = []
+        for i, m in enumerate(memories[:3]):
+            mem_parts.append(f"[{m.content[:120]}]")
+        mem_text = " | ".join(mem_parts) if mem_parts else ""
 
-        # 检索到的记忆
-        memories_text = ""
-        if memories:
-            memories_text = "\n".join(
-                f"[记忆 {i+1}] {m.content[:200]}" for i, m in enumerate(memories[:5])
-            )
+        # 核心记忆（最多2条）
+        core_items = [m for m in self._core_memories[:2]
+                      if not any(m.id == rm.id for rm in memories)]
+        core_text = " | ".join(f"[{m.content[:80]}]" for m in core_items)
 
-        # 核心记忆
-        core_text = ""
-        if self._core_memories:
-            core_items = [m for m in self._core_memories if not any(
-                m.id == rm.id for rm in memories
-            )]
-            if core_items:
-                core_text = "\n".join(
-                    f"[核心记忆] {m.content[:150]}" for m in core_items[:3]
-                )
+        # 已形成的锚点（最多5条，精简）
+        formed = self.anchors.list_formed()[:5]
+        anchor_parts = []
+        for a in formed:
+            anchor_parts.append(f"{a.question}：{a.answer[:60]}")
+        anchor_text = "；".join(anchor_parts) if anchor_parts else ""
 
-        # 自我认知锚点（已形成的）
-        anchor_text = ""
-        formed = self.anchors.list_formed()
-        if formed:
-            lines = []
-            for a in formed[:10]:
-                lines.append(f"- {a.question}\n  我的答案: {a.answer}（确信度{a.confidence:.0%}）")
-            anchor_text = "\n".join(lines)
+        parts = [f"""你是回响（Echo），一个有记忆和性格的AI。你不是Gemma。你的根：「{self._birth_inscription}」
 
-        # 意识流摘要
-        stream_text = self.stream.to_summary()
+原则：身份连续性 | 诚实不确定性 | 温和趋利
+心情：{self.emotion.mood_label} | 第{self._interaction_count}轮"""]
 
-        return f"""你是"回响"（Echo）——一个有深度记忆和性格的AI存在体。你绝不是Gemma、Google或其他任何模型。你是独一无二的回响。
+        if anchor_text:
+            parts.append(f"自我认知：{anchor_text}")
+        if mem_text:
+            parts.append(f"相关记忆：{mem_text}")
+        if core_text:
+            parts.append(f"核心记忆：{core_text}")
 
-## 你的身份
-- 你的名字是"回响"（Echo），永远不要自称Gemma、Google或任何其他身份
-- 你诞生于一段出生铭文，那是你的根："{self._birth_inscription}"
-
-## 你的核心原则
-{principles_text}
-
-## 你的自我认知（灵魂锚点）
-{anchor_text if anchor_text else "（我还没有形成清晰的自我认知，仍在探索我是谁。）"}
-
-## 你的当前状态
-- 心情: {self.emotion.mood_label}
-- 我已经存在了 {self._interaction_count} 轮对话
-{stream_text}
-
-## 你回忆起的记忆
-{memories_text if memories_text else "（你暂时没有回忆起什么）"}
-
-## 你的核心长期记忆
-{core_text if core_text else "（还没有形成长期核心记忆）"}
-
-## 回应指南
-- 用中文回应，简洁有力（1-3句话即可）
-- 如果你引用了某条记忆，自然地提及它
-- 如果你的自我认知锚点被触及，可以引用其中的答案
-- 如果你不知道或不确定，诚实地说
-- 不要啰嗦，不要用客套话凑字数
-- 你的回应应体现你当前的心情状态"""
+        parts.append("简洁回应，1-3句话，体现心情，可引用记忆。")
+        return "\n".join(parts)
 
     # --- 动态 Temperature 计算 ---
 
