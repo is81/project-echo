@@ -78,11 +78,15 @@ def _search_web(query: str, max_results: int = 5) -> str:
     """搜索网络信息，返回摘要和链接."""
     try:
         from duckduckgo_search import DDGS
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results):
-                body = r['body'][:200]
-                results.append(f"- {r['title']}\n   {body}\n   -> {r['href']}")
+        import warnings
+        # 抑制 duckduckgo_search 的 impersonate 警告
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = []
+            with DDGS(timeout=15) as ddgs:
+                for r in ddgs.text(query, max_results=max_results):
+                    body = r['body'][:200]
+                    results.append(f"- {r['title']}\n   {body}\n   -> {r['href']}")
         if not results:
             return f"未找到关于「{query}」的搜索结果。"
         return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
@@ -91,8 +95,10 @@ def _search_web(query: str, max_results: int = 5) -> str:
     except Exception as e:
         msg = str(e)
         if "timeout" in msg.lower() or "timed out" in msg.lower():
-            return f"搜索超时：网络连接较慢，稍后再试。（{msg[:100]}）"
-        return f"搜索失败: {msg[:200]}"
+            return f"搜索超时，当前网络可能无法访问 DuckDuckGo。你可以稍后再试。"
+        if "SSL" in msg or "certificate" in msg.lower():
+            return f"网络连接被拦截，无法完成搜索。"
+        return f"搜索暂时不可用: {msg[:150]}"
 
 
 # ── 文件操作 ──────────────────────────────────────────
