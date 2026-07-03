@@ -316,6 +316,18 @@ class MemoryStore:
 
     # ── 搜索 ────────────────────────────────────────
 
+    def list_by_source(self, source: str, limit: int = 100) -> list[Memory]:
+        """按来源类型列出活跃记忆."""
+        rows = self._conn.execute(
+            """
+            SELECT * FROM memories
+            WHERE source = ? AND archived = 0 AND forgotten = 0
+            ORDER BY priority_score DESC
+            LIMIT ?
+            """, (source, limit),
+        ).fetchall()
+        return [self._row_to_memory(r) for r in rows]
+
     def search_by_tags(self, tags: list[str], limit: int = 20) -> list[Memory]:
         rows = self._conn.execute(
             """

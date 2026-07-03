@@ -46,6 +46,7 @@ SRC_ICONS = {
     "birth": "[根]", "interaction": "[话]", "reflection": "[省]",
     "world_event": "[世]", "summary": "[摘]",
     "imagination": "[想]", "initiative": "[主]",
+    "procedural": "[习]",
 }
 
 

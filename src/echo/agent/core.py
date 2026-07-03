@@ -72,6 +72,16 @@ class EmotionalState:
                 "mood": self.mood_label}
 
 
+# 用户偏好信号关键词（极轻量预检，避免每次对话都调 LLM）
+_PREFERENCE_SIGNALS: list[str] = [
+    "你太", "你能不能", "你可以", "你不要", "你以后", "你说话",
+    "你回答", "你语气", "你总是", "你一直",
+    "我希望你", "我更喜欢你", "我喜欢你", "我想要你",
+    "简短", "详细", "直接", "温和", "温柔", "幽默", "认真",
+    "慢一点", "快一点", "少说", "多说",
+]
+
+
 @dataclass
 class Echo:
     """回响主体.
@@ -433,6 +443,19 @@ class Echo:
         if len(self._history) > 50:
             self._history = self._history[-50:]
 
+        # 程序性记忆检测：用户是否有偏好信号
+        preference = self._detect_preferences(user_input)
+        if preference:
+            proc_mem = Memory(
+                content=preference,
+                source="procedural",
+                tags=["procedural", "preference"],
+                emotional_valence=self.emotion.valence,
+                emotional_arousal=self.emotion.arousal,
+            )
+            proc_mem.compute_priority()
+            self.memory.insert(proc_mem)
+
         yield f"\n  [{self.emotion.mood_label} · t={temperature:.2f} · 记忆×{len(relevant_memories)}{tool_info}]"
 
         # 主动行为：~5% 概率回响主动发起
@@ -440,42 +463,125 @@ class Echo:
         if initiative:
             yield f"\n\n[*] 回响主动说：{initiative}"
 
-    # --- 记忆检索 ---
+    # --- 记忆检索（双系统）---
 
     def _retrieve_memories(self, query: str, limit: int = 10) -> list[Memory]:
-        """检索与当前输入相关的记忆.
+        """双系统记忆检索: 关键词（系统1）+ LLM语义重排（系统2）.
 
-        当前版本: 基于标签 + 关键词 + 权重排序
-        后续版本: 接入 embedding 模型做语义检索
+        系统1: 关键词重叠评分 → top-20 候选
+        系统2: LLM 语义理解 → 从候选池中精选 top-K
+        回退: LLM 不可用时直接返回系统1结果
         """
-        # 出生铭文始终包含
         birth = self.memory.get_birth()
         results = [birth] if birth else []
 
-        # 按权重检索活跃记忆
-        active = self.memory.list_active(limit=limit)
+        # ── 系统1: 关键词快速检索 ──
+        active = self.memory.list_active(limit=20)
         for mem in active:
             if mem.id not in {r.id for r in results}:
                 results.append(mem)
-                mem.record_access()
 
-        # 简单关键词匹配排序 (基于共同词数 / 权重)
+        # 关键词评分
         query_words = set(query.lower().split())
         scored = []
         for mem in results:
             mem_words = set(mem.content.lower().split())
             overlap = len(query_words & mem_words)
-            # 组合得分 = 关键词重叠 + 基础权重
             score = overlap * 0.1 + mem.base_weight
             scored.append((score, mem))
-
         scored.sort(key=lambda x: x[0], reverse=True)
+        candidates = [mem for _, mem in scored[:20]]
 
-        # 记录访问
-        for _, mem in scored:
+        # ── 系统2: LLM 语义重排 ──
+        if len(candidates) > 5 and self.llm and self.llm.status.get("active_model"):
+            try:
+                reranked = self._semantic_rerank(query, candidates, top_k=limit)
+                if reranked:
+                    for mem in reranked:
+                        self.memory.record_access(mem.id)
+                    return reranked[:limit]
+            except Exception:
+                pass  # 静默回退到系统1
+
+        # 回退: 记录访问后返回系统1结果
+        for _, mem in scored[:limit]:
             self.memory.record_access(mem.id)
+        return candidates[:limit]
 
-        return [mem for _, mem in scored[:limit]]
+    def _semantic_rerank(
+        self, query: str, candidates: list[Memory], top_k: int = 5,
+    ) -> list[Memory]:
+        """系统2: 调用 LLM 从候选记忆中精选最相关的 top-K 条.
+
+        不只看关键词重叠，而是理解查询和记忆的语义关联。
+        返回编号列表，解析后返回对应的 Memory 对象。
+        """
+        items = []
+        for i, m in enumerate(candidates):
+            items.append(f"{i+1}. {m.content[:120]}")
+
+        prompt = (
+            f'用户: "{query}"\n\n'
+            f"候选记忆:\n{chr(10).join(items)}\n\n"
+            f"选出与用户查询语义最相关的 {top_k} 条。"
+            f"只看编号，逗号分隔: "
+        )
+
+        response = self.llm.generate(
+            prompt=prompt,
+            system_prompt="你是记忆检索助手。只返回编号，如: 3,7,1,12,5。不解释。",
+            temperature=0.1,
+            max_tokens=30,
+        )
+
+        # 解析编号
+        import re
+        numbers = re.findall(r"\d+", response.text)
+        indices = [int(n) - 1 for n in numbers
+                   if 1 <= int(n) <= len(candidates)]
+        return [candidates[i] for i in indices[:top_k]]
+
+    # --- 程序性记忆检测 ---
+
+    def _detect_preferences(self, user_input: str) -> Optional[str]:
+        """检测用户输入中的偏好信号并提取为程序性记忆.
+
+        先用关键词预检，命中后再调 LLM 提取。
+        避免每次对话都调用 LLM。
+
+        Returns:
+            提取的程序性记忆内容，或 None
+        """
+        # 关键词预检
+        if not any(sig in user_input for sig in _PREFERENCE_SIGNALS):
+            return None
+
+        if not self.llm or not self.llm.status.get("active_model"):
+            return None
+
+        try:
+            prompt = (
+                f'用户说: "{user_input}"\n\n'
+                "如果这段话包含用户对回响（AI助手）的沟通偏好或行为习惯期望，"
+                "提取为一句话程序性记忆（以'用户偏好'或'用户希望'开头）。"
+                "如果不包含任何偏好信号，只返回 NONE。\n\n"
+                "示例:\n"
+                '- "你能不能简短点" → 用户偏好简短回复，1-2句话\n'
+                '- "我希望你更幽默" → 用户希望回响用幽默风趣的语气\n'
+                '- "今天天气不错" → NONE'
+            )
+            response = self.llm.generate(
+                prompt=prompt,
+                system_prompt="你是偏好提取器。只返回一句话或 NONE，不解释。",
+                temperature=0.1,
+                max_tokens=60,
+            )
+            text = response.text.strip()
+            if text and text.upper() != "NONE":
+                return text
+        except Exception:
+            pass
+        return None
 
     # --- 锚点检测 ---
 
@@ -522,6 +628,10 @@ class Echo:
                       if not any(m.id == rm.id for rm in memories)]
         core_text = " | ".join(f"[{m.content[:80]}]" for m in core_items)
 
+        # 程序性记忆（用户偏好，最多3条）
+        procedural = self.memory.list_by_source("procedural", limit=3)
+        proc_text = "；".join(m.content[:80] for m in procedural) if procedural else ""
+
         # 已形成的锚点（最多5条，精简）
         formed = self.anchors.list_formed()[:5]
         anchor_parts = []
@@ -536,6 +646,8 @@ class Echo:
 
         if anchor_text:
             parts.append(f"自我认知：{anchor_text}")
+        if proc_text:
+            parts.append(f"用户偏好：{proc_text}")
         if mem_text:
             parts.append(f"相关记忆：{mem_text}")
         if core_text:
