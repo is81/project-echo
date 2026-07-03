@@ -16,7 +16,7 @@ pip install -e .
 python -m pytest tests/ -v
 
 # 启动 llama-server（必须先启动，端口 8080）
-llama-server -m <模型.gguf> --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --reasoning off
+llama-server -m <模型.gguf> --host 127.0.0.1 --port 8080 -c 98304 -ngl 99 --jinja
 
 # 启动 CLI 对话
 python -m echo.cli
@@ -48,4 +48,4 @@ config/
 - LLM 后端 `stream()` 返回 `(Iterator[str], str)` ——（token 迭代器, 模型名）
 - `_NUMPY_AVAILABLE` 和 `_vec_available` 标志位控制可选依赖的优雅降级
 
-**Gemma 4 QAT 注意事项**: 此模型默认开启 thinking mode，必须用 `--reasoning off` 启动 llama-server，否则每次回应前会先做 400+ token 内部推理（18秒延迟）。流式输出时 `enable_thinking: False` extra_body 也对 llama-server 无效，必须在服务端禁用。
+**Gemma 4 QAT 注意事项**: 此模型默认开启 thinking mode。流式输出时通过 `enable_thinking: False` extra_body 禁用内部推理，避免 thinking token 混入响应流。

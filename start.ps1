@@ -18,9 +18,9 @@ $server = Start-Process -FilePath $LLAMA -ArgumentList @(
     "-m", $MODEL,
     "--host", "127.0.0.1",
     "--port", $PORT,
-    "-c", "8192",
+    "-c", "98304",
     "-ngl", "99",
-    "--reasoning", "off"
+    "--jinja"
 ) -PassThru -WindowStyle Hidden
 
 # 2. 等待服务就绪
