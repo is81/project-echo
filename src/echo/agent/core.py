@@ -199,6 +199,24 @@ class Echo:
         except Exception:
             pass
 
+        # 对话深度反思：从今天对话提取知识点
+        try:
+            learned = self._learn_from_conversations()
+            if learned > 0:
+                import sys
+                print(f"  [学习] 从对话中学到了 {learned} 条知识", file=sys.stderr)
+        except Exception:
+            pass
+
+        # 睡眠自主探索：围绕今天话题搜索学习
+        try:
+            explored = self._explore_and_learn()
+            if explored > 0:
+                import sys
+                print(f"  [探索] 自主搜索学到了 {explored} 条知识", file=sys.stderr)
+        except Exception:
+            pass
+
         # 睡眠压缩
         try:
             compressed = compress_memories(self)
@@ -355,9 +373,10 @@ class Echo:
         tools = tool_registry.to_openai_tools()
 
         # ── 工具调用循环 ──
-        MAX_TOOL_ROUNDS = 2  # 减少到 2 轮，避免重复搜索
+        MAX_TOOL_ROUNDS = 2
         tool_calls_made: list[str] = []
-        called_tools: set[str] = set()  # 本轮已调用的工具
+        called_tools: set[str] = set()
+        _pending_knowledge: list[tuple[str, str]] = []  # (text, context) 待提取知识
         final_text = ""
 
         for _round in range(MAX_TOOL_ROUNDS):
@@ -370,7 +389,6 @@ class Echo:
 
             # 模型决定调用工具
             if response.tool_calls:
-                # 添加 assistant 消息（含 tool_calls）
                 assistant_msg = {
                     "role": "assistant",
                     "content": None,
@@ -392,7 +410,6 @@ class Echo:
                     tool_name = tc["name"]
                     tool_args = tc["arguments"]
 
-                    # 防重复：同一工具本轮只调用一次
                     if tool_name in called_tools:
                         continue
                     called_tools.add(tool_name)
@@ -400,13 +417,20 @@ class Echo:
 
                     yield f"\n  [+]{tool_name}\n"
 
-                    # 执行工具
-                    result = tool_registry.execute(tool_name, tool_args, confirm_func=confirm_func)
-                    # 截断过长结果
+                    # 执行工具（获取完整结果，截断前）
+                    full_result = tool_registry.execute(tool_name, tool_args, confirm_func=confirm_func)
+
+                    # 途径2: 捕获知识源文本——截断前保存
+                    if tool_name == "read_file" and len(full_result) > 100:
+                        _pending_knowledge.append((full_result, f"文件「{tool_args.get('path', '?')}」内容"))
+                    elif tool_name == "search_web":
+                        _pending_knowledge.append((full_result, f"搜索「{tool_args.get('query', '?')}」结果"))
+
+                    # 截断用于对话上下文
+                    result = full_result
                     if len(result) > 500:
                         result = result[:500] + "..."
 
-                    # 添加工具结果消息
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -415,7 +439,6 @@ class Echo:
 
                 continue  # 下一轮 LLM 调用
 
-            # 模型返回纯文本
             final_text = response.text
             break
 
@@ -442,6 +465,23 @@ class Echo:
         self._history.append({"role": "echo", "content": final_text})
         if len(self._history) > 50:
             self._history = self._history[-50:]
+
+        # 途径2: 从工具结果中提取知识（read_file / search_web）
+        learned_count = 0
+        for text, context in _pending_knowledge:
+            facts = self._extract_knowledge(text, context, max_facts=5)
+            for fact in facts:
+                mem = Memory(
+                    content=f"[工具习得] {fact}",
+                    source="learned",
+                    tags=["learned", "tool"],
+                    base_weight=0.45,
+                    emotional_valence=self.emotion.valence,
+                    emotional_arousal=self.emotion.arousal,
+                )
+                mem.compute_priority()
+                self.memory.insert(mem)
+                learned_count += 1
 
         # 程序性记忆检测：用户是否有偏好信号
         preference = self._detect_preferences(user_input)
@@ -582,6 +622,161 @@ class Echo:
         except Exception:
             pass
         return None
+
+    # --- 知识提取引擎（三个学习途径共用）---
+
+    def _extract_knowledge(
+        self, text: str, context: str, max_facts: int = 5,
+    ) -> list[str]:
+        """从文本中提取客观知识点。所有学习途径的底层引擎。
+
+        Args:
+            text: 待提取的文本（搜索结果、文件内容、对话记录等）
+            context: 背景说明，帮助 LLM 理解文本性质
+            max_facts: 最多提取几条知识
+
+        Returns:
+            知识点字符串列表，每个是一句完整的中文陈述
+        """
+        if not self.llm or not self.llm.status.get("active_model"):
+            return []
+        try:
+            prompt = (
+                "从以下文本中提取客观知识点。每条必须是一句完整的中文陈述，只提取确定的事实。\n\n"
+                f"背景: {context}\n\n"
+                f"文本:\n{text[:3000]}\n\n"
+                f"返回格式: 每行一条，以 '- ' 开头。最多{max_facts}条。如果没有确定的知识，只返回 NONE。"
+            )
+            response = self.llm.generate(
+                prompt=prompt,
+                system_prompt="你是知识提取器。只返回知识列表或 NONE，不解释。",
+                temperature=0.1,
+                max_tokens=200,
+            )
+            text_out = response.text.strip()
+            if not text_out or text_out.upper() == "NONE":
+                return []
+            facts = []
+            for line in text_out.split("\n"):
+                line = line.strip()
+                if line.startswith("- "):
+                    fact = line[2:].strip()
+                elif line.startswith("-"):
+                    fact = line[1:].strip()
+                else:
+                    continue
+                if fact and len(fact) > 5:
+                    facts.append(fact)
+            return facts[:max_facts]
+        except Exception:
+            return []
+
+    # --- 途径1: 对话深度反思 ---
+
+    def _learn_from_conversations(self) -> int:
+        """从当天的对话记录中提取多条知识点。sleep() 时调用。
+
+        不再把一天只压缩成一条 summary——而是从中提取每一个可独立检索的知识点，
+        每个知识点都是一条独立的 source="learned" 记忆。
+        """
+        today_start = time.time() - 24 * 3600
+        all_active = self.memory.list_active(limit=100)
+        convos = [
+            m for m in all_active
+            if m.source == "interaction" and m.created_at > today_start
+        ]
+        if len(convos) < 3:
+            return 0
+
+        combined = "\n---\n".join(m.content[:300] for m in convos[:20])
+        facts = self._extract_knowledge(
+            combined, "今天的对话记录，包含用户和回响之间的多轮交流",
+            max_facts=8,
+        )
+
+        count = 0
+        for fact in facts:
+            mem = Memory(
+                content=f"[对话习得] {fact}",
+                source="learned",
+                tags=["learned", "reflection"],
+                base_weight=0.4,
+            )
+            mem.compute_priority()
+            self.memory.insert(mem)
+            count += 1
+        return count
+
+    # --- 途径3: 睡眠自主探索 ---
+
+    def _explore_and_learn(self) -> int:
+        """识别当天讨论的核心话题，自主搜索延伸阅读并学习。sleep() 时调用。
+
+        模拟人类"睡前查一下今天聊到的东西"的行为——回响围绕今天的话题，
+        自己去搜一下了解更多，然后记住。
+        """
+        from ..tools.builtin import _search_web
+
+        today_start = time.time() - 24 * 3600
+        all_active = self.memory.list_active(limit=100)
+        recent = [
+            m for m in all_active
+            if m.source == "interaction" and m.created_at > today_start
+        ]
+        if len(recent) < 3:
+            return 0
+
+        # 步骤1: 识别今天核心话题
+        convo_text = "\n".join(m.content[:200] for m in recent[:15])
+        topics: list[str] = []
+        try:
+            topic_resp = self.llm.generate(
+                prompt=(
+                    "以下对话讨论了哪些核心话题？每行输出一个关键词/短语（2-6字），最多3个话题:\n\n"
+                    f"{convo_text[:1500]}"
+                ),
+                system_prompt="你是话题识别器。每行一个话题关键词，不要解释。",
+                temperature=0.1,
+                max_tokens=60,
+            )
+            for line in topic_resp.text.strip().split("\n"):
+                t = line.strip("- ").strip()
+                if t and len(t) >= 2:
+                    topics.append(t)
+            topics = topics[:3]
+        except Exception:
+            return 0
+
+        if not topics:
+            return 0
+
+        # 步骤2: 每个话题搜索 + 提取知识
+        import sys
+        count = 0
+        for topic in topics:
+            try:
+                print(f"  [探索] 搜索: {topic}...", file=sys.stderr)
+                search_results = _search_web(topic, max_results=3)
+                if "未搜索到" in search_results:
+                    continue
+                facts = self._extract_knowledge(
+                    search_results,
+                    f"关于「{topic}」的网络搜索结果",
+                    max_facts=3,
+                )
+                for fact in facts:
+                    mem = Memory(
+                        content=f"[自主探索] {fact}\n相关话题: {topic}",
+                        source="learned",
+                        tags=["learned", "autonomous"],
+                        base_weight=0.35,
+                    )
+                    mem.compute_priority()
+                    self.memory.insert(mem)
+                    count += 1
+            except Exception:
+                continue
+        return count
 
     # --- 锚点检测 ---
 
