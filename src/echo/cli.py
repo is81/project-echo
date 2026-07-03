@@ -234,6 +234,7 @@ def main():
             _chat_echo(echo, full_text, tools)
             if initiative:
                 console.print(Text(f"\n💭 {initiative}", style="italic bright_yellow"))
+            console.print()  # 回响说完后空一行
 
     except KeyboardInterrupt:
         console.print("\n  [yellow]中断[/]")
