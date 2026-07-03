@@ -229,6 +229,7 @@ def main():
                 if token.startswith("\n  [") and "·" in token: continue
                 full_text += token
             _chat_echo(echo, full_text, tools)
+            console.print()  # 空行
 
     except KeyboardInterrupt:
         console.print("\n  [yellow]中断[/]")
