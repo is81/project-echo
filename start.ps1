@@ -19,13 +19,21 @@ $server = Start-Process -FilePath $LLAMA -ArgumentList @(
 ) -PassThru -WindowStyle Hidden
 
 Write-Host '      Waiting for model to load ...' -ForegroundColor DarkGray
+$timeout = 120
+$elapsed = 0
 do {
     Start-Sleep -Seconds 2
+    $elapsed += 2
     try {
-        $r = Invoke-RestMethod -Uri 'http://127.0.0.1:$PORT/v1/models' -TimeoutSec 2 -ErrorAction Stop
+        $r = Invoke-RestMethod -Uri "http://127.0.0.1:${PORT}/v1/models" -TimeoutSec 2 -ErrorAction Stop
         $ready = $true
     } catch {
         $ready = $false
+    }
+    if ($elapsed -ge $timeout) {
+        Write-Host '      ERROR: Model failed to load within 120s' -ForegroundColor Red
+        Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+        exit 1
     }
 } until ($ready)
 
