@@ -75,30 +75,103 @@ def _store_imagination(thought: str, store=None, llm=None) -> str:
 # ── 联网搜索 ──────────────────────────────────────────
 
 def _search_web(query: str, max_results: int = 5) -> str:
-    """搜索网络信息，返回摘要和链接."""
+    """搜索网络信息，返回摘要和链接.
+
+    策略: 优先 DuckDuckGo（需代理）→ 回退 Bing（国内可用）→ 回退百度
+    全部零 API Key，纯 Python 内置库。
+    """
+    import urllib.request
+    import urllib.parse
+    import html.parser
+    import re
+
+    # ── 方案1: DuckDuckGo HTML ──
     try:
-        from duckduckgo_search import DDGS
-        import warnings
-        # 抑制 duckduckgo_search 的 impersonate 警告
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            results = []
-            with DDGS(timeout=15) as ddgs:
-                for r in ddgs.text(query, max_results=max_results):
-                    body = r['body'][:200]
-                    results.append(f"- {r['title']}\n   {body}\n   -> {r['href']}")
-        if not results:
-            return f"未找到关于「{query}」的搜索结果。"
-        return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
-    except ImportError:
-        return "联网搜索功能未启用。请安装: pip install duckduckgo_search"
-    except Exception as e:
-        msg = str(e)
-        if "timeout" in msg.lower() or "timed out" in msg.lower():
-            return f"搜索超时，当前网络可能无法访问 DuckDuckGo。你可以稍后再试。"
-        if "SSL" in msg or "certificate" in msg.lower():
-            return f"网络连接被拦截，无法完成搜索。"
-        return f"搜索暂时不可用: {msg[:150]}"
+        url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html_text = resp.read().decode("utf-8", errors="ignore")
+
+        results = []
+        for m in re.finditer(
+            r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+            r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
+            html_text, re.DOTALL
+        ):
+            href, title, snippet = m.groups()
+            title = re.sub(r'<[^>]+>', '', title).strip()
+            snippet = re.sub(r'<[^>]+>', '', snippet).strip()
+            if title and href.startswith("http"):
+                results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
+                if len(results) >= max_results:
+                    break
+
+        if results:
+            return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+    except Exception:
+        pass
+
+    # ── 方案2: Bing ──
+    try:
+        url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}&setlang=zh"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html_text = resp.read().decode("utf-8", errors="ignore")
+
+        results = []
+        for m in re.finditer(
+            r'<li class="b_algo"[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+            r'<p[^>]*class="b_lineclamp\d*"[^>]*>(.*?)</p>',
+            html_text, re.DOTALL
+        ):
+            href, title, snippet = m.groups()
+            title = re.sub(r'<[^>]+>', '', title).strip()
+            snippet = re.sub(r'<[^>]+>', '', snippet).strip()
+            if title:
+                results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
+                if len(results) >= max_results:
+                    break
+
+        if results:
+            return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+    except Exception:
+        pass
+
+    # ── 方案3: 百度 ──
+    try:
+        url = f"https://www.baidu.com/s?wd={urllib.parse.quote(query)}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html_text = resp.read().decode("utf-8", errors="ignore")
+
+        results = []
+        for m in re.finditer(
+            r'<div[^>]*class="result[^"]*c-container[^"]*"[^>]*>.*?'
+            r'<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+            r'<span[^>]*class="content-right_[^"]*"[^>]*>(.*?)</span>',
+            html_text, re.DOTALL
+        ):
+            href, title, snippet = m.groups()
+            title = re.sub(r'<[^>]+>', '', title).strip()
+            snippet = re.sub(r'<[^>]+>', '', snippet).strip()
+            if title and not title.startswith("<"):
+                results.append(f"- {title[:120]}\n   {snippet[:200]}\n   -> {href}")
+                if len(results) >= max_results:
+                    break
+
+        if results:
+            return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+    except Exception:
+        pass
+
+    # 全部失败
+    return f"搜索暂时不可用：当前网络无法访问 DuckDuckGo / Bing / 百度。请检查网络连接。"
 
 
 # ── 文件操作 ──────────────────────────────────────────

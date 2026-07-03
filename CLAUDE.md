@@ -49,3 +49,12 @@ config/
 - `_NUMPY_AVAILABLE` 和 `_vec_available` 标志位控制可选依赖的优雅降级
 
 **Gemma 4 QAT 注意事项**: 此模型默认开启 thinking mode，必须用 `--reasoning off` 启动 llama-server，否则每次回应前会先做 400+ token 内部推理（18秒延迟）。流式输出时 `enable_thinking: False` extra_body 也对 llama-server 无效，必须在服务端禁用。
+
+## 开发环境约束
+
+**网络环境**: 开发者位于中国内地，国外资源（PyPI、GitHub、DuckDuckGo 等）可能不可达或极慢。开发时必须：
+- pip install 优先使用清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`
+- 国外 API/服务只尝试一次，失败后立即切换到国内可用替代方案（Bing 搜索、百度搜索、国内 pip 镜像等）
+- 新增依赖尽量零依赖或纯 Python 内置库，避免需要从国外下载大文件
+- 搜索功能使用 `urllib` 内置库 + Bing/百度，不使用需要代理的 DuckDuckGo/Google
+- 模型下载优先使用 hf-mirror.com 或 modelscope
