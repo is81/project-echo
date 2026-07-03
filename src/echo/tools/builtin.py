@@ -55,6 +55,23 @@ def _search_memory(query: str, store=None) -> str:
     return "\n".join(matches[:10])
 
 
+# ── 想象力存储 ──────────────────────────────────────
+
+def _store_imagination(thought: str, store=None, llm=None) -> str:
+    """将假设性念头存入想象力存储."""
+    if store is None:
+        return "记忆存储未初始化。"
+    from ..memory.models import Memory
+    mem = Memory(
+        content=thought,
+        source="imagination",
+        tags=["imagination", "hypothetical"],
+    )
+    mem.compute_priority()
+    store.insert(mem)
+    return f"已存入想象力存储: {thought[:100]}"
+
+
 # ── 联网搜索 ──────────────────────────────────────────
 
 def _search_web(query: str, max_results: int = 5) -> str:
@@ -164,6 +181,13 @@ def register_builtin_tools(registry, echo_instance) -> None:
         description="搜索自己的记忆库，查找包含特定关键词的历史记忆。",
         parameters={"query": {"type": "string", "description": "要搜索的关键词或短语"}},
         func=lambda query: _search_memory(query, store=echo_instance.memory),
+    ))
+
+    registry.register(Tool(
+        name="store_imagination",
+        description="将假设性、未验证的念头或想象存入想象力存储。当你产生一个'可能是什么'的猜想、创意或直觉时调用。这些念头不需要是真实的，它们是你创造力的延伸。",
+        parameters={"thought": {"type": "string", "description": "要存储的念头或想象内容"}},
+        func=lambda thought: _store_imagination(thought, store=echo_instance.memory),
     ))
 
     registry.register(Tool(

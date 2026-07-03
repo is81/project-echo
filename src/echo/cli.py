@@ -45,6 +45,7 @@ MOOD_STYLES = {
 SRC_ICONS = {
     "birth": "🏠", "interaction": "💬", "reflection": "🪞",
     "world_event": "🌍", "summary": "📝",
+    "imagination": "💡", "initiative": "💭",
 }
 
 
@@ -222,14 +223,17 @@ def main():
 
             # 对话
             console.print()  # 空行
-            full_text = ""; tools = []
+            full_text = ""; tools = []; initiative = None
             for token in echo.respond_stream(user_input):
                 if token.startswith("\n  🔧"):
                     tools.append(token.strip().replace("🔧 ", "")); continue
                 if token.startswith("\n  [") and "·" in token: continue
+                if token.startswith("\n\n💭 回响主动说："):
+                    initiative = token.replace("\n\n💭 回响主动说：", ""); continue
                 full_text += token
             _chat_echo(echo, full_text, tools)
-            console.print()  # 空行
+            if initiative:
+                console.print(Text(f"\n💭 {initiative}", style="italic bright_yellow"))
 
     except KeyboardInterrupt:
         console.print("\n  [yellow]中断[/]")

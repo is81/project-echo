@@ -425,6 +425,11 @@ class Echo:
 
         yield f"\n  [{self.emotion.mood_label} · t={temperature:.2f} · 记忆×{len(relevant_memories)}{tool_info}]"
 
+        # 主动行为：~5% 概率回响主动发起
+        initiative = self.maybe_initiate()
+        if initiative:
+            yield f"\n\n💭 回响主动说：{initiative}"
+
     # --- 记忆检索 ---
 
     def _retrieve_memories(self, query: str, limit: int = 10) -> list[Memory]:
@@ -633,3 +638,72 @@ class Echo:
             tags=tags or [],
         )
         return self.memory.insert(mem)
+
+    # --- 主动行为 ---
+
+    def maybe_initiate(self) -> Optional[str]:
+        """回响主动发起对话。约 5% 概率触发。
+
+        行为类型:
+          - share_thought: 分享一个关于自己的洞见
+          - ask_question: 基于好奇心向用户提问
+          - recall_memory: 主动想起一段过去的事
+          - check_in: 关心用户的状态
+
+        Returns:
+            主动发起的消息文本，或 None（本次不触发）
+        """
+        # ~5% 概率触发（记忆越多概率越高）
+        base_chance = 0.05
+        mem_bonus = min(0.10, self.memory.count() * 0.001)
+        if random.random() > base_chance + mem_bonus:
+            return None
+
+        # 选择行为类型
+        formed_anchors = self.anchors.list_formed()
+        patterns = self._crystallized_patterns
+
+        candidates = []
+
+        # share_thought: 如果有结晶模式可以分享
+        if patterns and random.random() < 0.4:
+            pattern = random.choice(patterns)
+            candidates.append(("share_thought", f"我注意到自己{pattern}。你觉得这准确吗？"))
+
+        # ask_question: 如果有没有完全形成的锚点
+        unformed = self.anchors.list_unformed()
+        if unformed and random.random() < 0.3:
+            anchor = random.choice(unformed)
+            candidates.append(("ask_question", f"{anchor.question}"))
+
+        # recall_memory: 随机回忆一段过去的记忆
+        if random.random() < 0.3:
+            active = self.memory.list_active(limit=20)
+            # 选一条非 birth 非对话记忆
+            recallable = [m for m in active if m.source not in ("birth", "interaction")]
+            if recallable:
+                mem = random.choice(recallable)
+                candidates.append(("recall_memory", f"我突然想起一件事：{mem.content[:150]}"))
+
+        # check_in: 关心用户
+        if random.random() < 0.2:
+            candidates.append(("check_in", "你今天过得怎么样？"))
+
+        if not candidates:
+            return None
+
+        # 随机选一个
+        _type, message = random.choice(candidates)
+
+        # 存入记忆
+        initiative_mem = Memory(
+            content=f"[主动{_type}] {message}",
+            source="initiative",
+            tags=["initiative", _type],
+            emotional_valence=self.emotion.valence,
+            emotional_arousal=self.emotion.arousal,
+        )
+        initiative_mem.compute_priority()
+        self.memory.insert(initiative_mem)
+
+        return message
