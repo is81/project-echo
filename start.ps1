@@ -5,6 +5,10 @@
 chcp 65001 > $null
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
+# 锁定 GPU 频率防止降频（需管理员权限，仅首次执行一次即可）
+# nvidia-smi -pm 1
+# nvidia-smi -lgc 1100,1700
+
 $MODEL = "E:\Models\gemma\gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
 $LLAMA = "D:\llama-b9568-bin-win-cuda-12.4-x64\llama-server.exe"
 $PORT = 8080
