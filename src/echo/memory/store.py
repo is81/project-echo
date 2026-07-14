@@ -101,6 +101,7 @@ class MemoryStore:
             "priority_score": "ALTER TABLE memories ADD COLUMN priority_score REAL DEFAULT 0.5",
             "half_life_hours": "ALTER TABLE memories ADD COLUMN half_life_hours REAL DEFAULT 168.0",
             "forgotten": "ALTER TABLE memories ADD COLUMN forgotten INTEGER DEFAULT 0",
+            "content_hash": "ALTER TABLE memories ADD COLUMN content_hash TEXT",
         }
         for col, sql in migrations.items():
             if col not in existing:
@@ -108,6 +109,14 @@ class MemoryStore:
                     self._conn.execute(sql)
                 except sqlite3.OperationalError:
                     pass
+        # content_hash 唯一索引（用于 INSERT OR IGNORE 去重）
+        if "content_hash" not in existing:
+            try:
+                self._conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)"
+                )
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
 
     def _try_load_vec(self) -> None:
@@ -134,14 +143,15 @@ class MemoryStore:
         self._conn.execute(
             """
             INSERT OR REPLACE INTO memories
-                (id, content, embedding_json, created_at, last_accessed,
+                (id, content, content_hash, embedding_json, created_at, last_accessed,
                  access_count, emotional_valence, emotional_arousal,
                  base_weight, priority_score, half_life_hours,
                  archived, forgotten, tags_json, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 memory.id, memory.content,
+                memory.compute_hash(),
                 json.dumps(memory.embedding) if memory.embedding else None,
                 memory.created_at, memory.last_accessed,
                 memory.access_count, memory.emotional_valence, memory.emotional_arousal,
@@ -159,6 +169,58 @@ class MemoryStore:
 
         self._conn.commit()
         return memory.id
+
+    def bulk_insert(self, memories: list[Memory]) -> int:
+        """批量插入记忆，单事务提交。跳过 content_hash 重复的条目。
+
+        ZIM 导入等批量场景专用。不生成向量 embedding。
+        每条记忆的 priority_score 在插入前自动计算。
+
+        Args:
+            memories: 待插入的 Memory 列表
+
+        Returns:
+            实际插入的行数（跳过的重复项不计入）
+        """
+        if not memories:
+            return 0
+
+        inserted = 0
+        try:
+            self._conn.execute("BEGIN")
+            for mem in memories:
+                mem.compute_priority()
+                mem.compute_hash()
+                try:
+                    self._conn.execute(
+                        """
+                        INSERT OR IGNORE INTO memories
+                            (id, content, content_hash, embedding_json, created_at, last_accessed,
+                             access_count, emotional_valence, emotional_arousal,
+                             base_weight, priority_score, half_life_hours,
+                             archived, forgotten, tags_json, source)
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            mem.id, mem.content, mem.content_hash,
+                            mem.created_at, mem.last_accessed,
+                            mem.access_count, mem.emotional_valence, mem.emotional_arousal,
+                            mem.base_weight, mem.priority_score, mem.half_life_hours,
+                            1 if mem.archived else 0, 1 if mem.forgotten else 0,
+                            json.dumps(mem.tags), mem.source,
+                        ),
+                    )
+                    if self._conn.total_changes > inserted:
+                        inserted += 1
+                except sqlite3.IntegrityError:
+                    pass  # content_hash 冲突，跳过
+
+            self._conn.commit()
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+        return inserted
 
     def get(self, memory_id: str) -> Optional[Memory]:
         row = self._conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
@@ -437,6 +499,7 @@ class MemoryStore:
         return Memory(
             id=row["id"],
             content=row["content"],
+            content_hash=row["content_hash"] if "content_hash" in keys else None,
             embedding=json.loads(row["embedding_json"]) if row["embedding_json"] else None,
             created_at=row["created_at"],
             last_accessed=row["last_accessed"],

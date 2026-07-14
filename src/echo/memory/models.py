@@ -17,6 +17,7 @@
   遗忘记忆不参与检索，但保留在 DB 中（可恢复）。
 """
 
+import hashlib
 import math
 import time
 from dataclasses import dataclass, field
@@ -57,6 +58,16 @@ class Memory:
     forgotten: bool = False
     tags: list[str] = field(default_factory=list)
     source: str = "interaction"
+    content_hash: Optional[str] = None  # SHA256 前 16 位 hex，用于去重
+
+    # ── 内容哈希 ──────────────────────────────────
+
+    def compute_hash(self) -> str:
+        """计算内容 SHA256 前 16 位 hex，用于去重."""
+        if self.content_hash:
+            return self.content_hash
+        self.content_hash = hashlib.sha256(self.content.encode("utf-8")).hexdigest()[:16]
+        return self.content_hash
 
     # ── 优先级计算 ──────────────────────────────────
 
@@ -154,6 +165,7 @@ class Memory:
         return {
             "id": self.id,
             "content": self.content,
+            "content_hash": self.content_hash or self.compute_hash(),
             "created_at": self.created_at,
             "last_accessed": self.last_accessed,
             "access_count": self.access_count,
@@ -174,6 +186,7 @@ class Memory:
         return cls(
             id=data["id"],
             content=data["content"],
+            content_hash=data.get("content_hash"),
             created_at=data["created_at"],
             last_accessed=data.get("last_accessed", data["created_at"]),
             access_count=data.get("access_count", 0),

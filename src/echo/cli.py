@@ -6,7 +6,9 @@ Usage:
 """
 
 import argparse
+import msvcrt
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -259,7 +261,168 @@ def _run_explore_mode(echo, interval_min: int = 10, max_rounds: int = 0,
             echo.sleep()
         console.print(f"[dim]探索 {round_num} 轮后退出[/]")
 
+# -- 空闲主动说话 --------------------------------------
+
+def _input_with_idle(echo, prompt_text: str, idle_seconds: int = 120):
+    """轮询式输入，支持空闲检测。
+
+    每 100ms 检查键盘输入。
+    空闲超过 idle_seconds 时触发 echo.idle_initiate()。
+    每 30 秒执行一次情绪衰减。
+
+    非 TTY（管道/重定向）时回退到标准 input()。
+
+    Returns:
+        (user_input: str | None, initiative: str | None)
+    """
+    # 非 TTY 环境（管道/重定向）：回退到普通 input()
+    if not sys.stdin.isatty():
+        user_input = console.input(prompt_text).strip()
+        return user_input, None
+
+    # 渲染 prompt
+    console.print(prompt_text, end="")
+    sys.stdout.flush()
+
+    buffer: list[str] = []
+    last_activity = time.time()
+    last_emotion_decay = time.time()
+    idle_triggered = False
+    EMOTION_DECAY_INTERVAL = 30  # 每 30 秒衰减一次
+
+    def _redraw_prompt():
+        """清除当前行并重绘提示符和已输入文字."""
+        # 回到行首，清除到行尾
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+        console.print(prompt_text, end="")
+        if buffer:
+            sys.stdout.write("".join(buffer))
+        sys.stdout.flush()
+
+    while True:
+        if msvcrt.kbhit():
+            ch = msvcrt.getwch()
+
+            if ch == "\r":  # Enter
+                console.print()  # 换行
+                return "".join(buffer).strip(), None
+            elif ch == "\x08":  # Backspace
+                if buffer:
+                    buffer.pop()
+                    _redraw_prompt()
+                idle_triggered = False
+                last_activity = time.time()
+            elif ch == "\x03":  # Ctrl+C
+                console.print()
+                raise KeyboardInterrupt
+            elif ch == "\x1a":  # Ctrl+Z (EOF)
+                raise EOFError
+            elif ch == "\x1b":  # Escape — 忽略（可能有后续序列）
+                pass
+            elif ch == "\xe0":  # 方向键前缀 — 读取下一个字符并忽略
+                try:
+                    msvcrt.getwch()
+                except Exception:
+                    pass
+            elif ord(ch) >= 32 or ch in ("\t",):  # 可打印字符或 Tab
+                buffer.append(ch)
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+                idle_triggered = False
+                last_activity = time.time()
+
+        else:
+            time.sleep(0.1)
+            now = time.time()
+
+            # 情绪衰减（每 30 秒）
+            if now - last_emotion_decay >= EMOTION_DECAY_INTERVAL:
+                echo.emotion.idle_regress(now - last_emotion_decay)
+                last_emotion_decay = now
+
+            # 空闲主动说话
+            if not idle_triggered and buffer == [] and now - last_activity >= idle_seconds:
+                initiative = echo.idle_initiate()
+                if initiative:
+                    idle_triggered = True
+                    last_activity = time.time()
+                    last_emotion_decay = time.time()
+                    # 清除当前提示行，显示主动说话
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                    _chat_idle_initiative(echo, initiative)
+                    # 重绘提示符
+                    _redraw_prompt()
+                    return None, initiative
+
+
+def _chat_idle_initiative(echo, text: str) -> None:
+    """显示空闲主动说话气泡."""
+    mc, _ = MOOD_STYLES.get(echo.emotion.mood_label, ("white", "•"))
+    prefix = Text()
+    prefix.append("💭 回响", style=f"bold {C_ECHO}")
+
+    console.print()
+    console.print(prefix)
+    for line in text.strip().split("\n"):
+        if line.strip():
+            console.print(f"     {line}", style="white italic")
+    console.print()
+
+
 # -- 主循环 --------------------------------------------
+
+def _run_zim_ingest(echo, zim_path: str, topic: str = "",
+                    mode: str = "first_para", max_articles: int = 0,
+                    batch_size: int = 5000, dry_run: bool = False) -> None:
+    """ZIM 导入模式：扫描分类 → 导入记忆."""
+    from echo.zim_ingest import resolve_keywords, ingest_zim_to_echo
+
+    # 解析关键词
+    keywords = resolve_keywords(topic) if topic else None
+
+    if topic and keywords:
+        console.print(f"[bold]话题: {topic}[/]")
+        console.print(f"[dim]关键词: {', '.join(keywords[:15])}{'...' if len(keywords) > 15 else ''}[/]")
+
+    console.print(f"[dim]模式: {mode}  批次大小: {batch_size:,}[/]")
+    if dry_run:
+        console.print("[yellow]Dry-run 模式 — 只扫描不导入[/]")
+    console.print()
+
+    # 执行导入
+    stats = ingest_zim_to_echo(
+        echo, zim_path,
+        mode=mode,
+        max_articles=max_articles,
+        batch_size=batch_size,
+        keywords=keywords,
+        dry_run=dry_run,
+        console=console,
+    )
+
+    # 汇总
+    console.print()
+    t = Table(title="导入结果", border_style=C_ACCENT, box=box.SIMPLE)
+    t.add_column("指标", style=C_DIM)
+    t.add_column("数值", style="bright_white", justify="right")
+    if stats["total_categories"] > 0:
+        t.add_row("匹配分类", f"{stats['total_categories']:,}")
+    if stats["total_article_ids"] > 0:
+        t.add_row("去重文章 ID", f"{stats['total_article_ids']:,}")
+    if not dry_run:
+        t.add_row("新导入", f"{stats['imported']:,}")
+        t.add_row("跳过（重复）", f"{stats['skipped']:,}")
+        t.add_row("记忆总数", f"{echo.memory.count():,}")
+    t.add_row("耗时", f"{stats['duration_sec']:.1f}s")
+    console.print(t)
+
+    if not dry_run and stats["imported"] > 0:
+        console.print(f"\n[green]=) 已导入 {stats['imported']:,} 篇 Wikipedia 文章到记忆库[/]")
+
+    echo.sleep()
+
 
 def main():
     parser = argparse.ArgumentParser(description="回响计划 · Project Echo CLI")
@@ -272,6 +435,21 @@ def main():
                        help="探索轮数（0=无限循环）")
     parser.add_argument("--topic", type=str, default="",
                        help="指定探索话题（逗号分隔多个），如: --topic \"量子计算,AI意识\"")
+
+    # ── ZIM 导入 ──
+    parser.add_argument("--ingest-zim", type=str, metavar="PATH",
+                       help="从 ZIM 文件导入内容到记忆库")
+    parser.add_argument("--zim-topic", type=str, default="",
+                       help="按话题筛选（预定义: computer/philosophy/science/history/art，或自定义关键词逗号分隔）")
+    parser.add_argument("--zim-mode", type=str, default="first_para",
+                       choices=["titles", "first_para", "full"],
+                       help="导入模式（默认 first_para）")
+    parser.add_argument("--zim-batch-size", type=int, default=5000,
+                       help="每批提交数（默认 5000）")
+    parser.add_argument("--zim-dry-run", action="store_true",
+                       help="只扫描分类不导入")
+    parser.add_argument("--max-articles", type=int, default=0,
+                       help="最多导入/探索文章数（0=不限）")
     args = parser.parse_args()
 
     # 解析话题列表
@@ -282,6 +460,18 @@ def main():
     with console.status("[bright_yellow]唤醒 ...[/]", spinner="dots"):
         echo = Echo()
         echo.wake(db_path=args.db)
+
+    # ── ZIM 导入模式 ──
+    if args.ingest_zim:
+        _run_zim_ingest(
+            echo, args.ingest_zim,
+            topic=args.zim_topic,
+            mode=args.zim_mode,
+            max_articles=args.max_articles,
+            batch_size=args.zim_batch_size,
+            dry_run=args.zim_dry_run,
+        )
+        return
 
     # ── 探索模式 ──
     if args.explore:
@@ -295,8 +485,16 @@ def main():
         while True:
             mc, _ = MOOD_STYLES.get(echo.emotion.mood_label, ("white", ""))
             prompt = Text(); prompt.append("> ", style=mc); prompt.append("你 ", style=f"bold {C_USER}")
-            user_input = console.input(prompt).strip()
-            if not user_input: continue
+
+            user_input, idle_initiative = _input_with_idle(echo, prompt, idle_seconds=120)
+
+            # 空闲主动说话
+            if idle_initiative:
+                # 不重置空闲计时器，继续等待用户输入
+                continue
+
+            if not user_input:
+                continue
 
             if user_input.startswith("/"):
                 cmd = user_input.split()[0].lower()

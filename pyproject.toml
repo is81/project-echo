@@ -19,7 +19,9 @@ dependencies = [
 local = [
     "llama-cpp-python>=0.2.0",
 ]
-
+zim = [
+    "libzim>=3.5.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

@@ -23,7 +23,21 @@ llama-server -m <模型.gguf> --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --rea
 python -m echo.cli                           # 聊天模式
 python -m echo.cli --explore                 # 探索模式（自主搜索学习）
 python -m echo.cli --explore --topic "话题1,话题2" --interval 5 --rounds 10
+
+# ZIM Wikipedia 导入
+pip install libzim -i https://pypi.tuna.tsinghua.edu.cn/simple   # 安装 ZIM 读取依赖
+python -m echo.cli --ingest-zim <文件.zim> --zim-topic computer --zim-dry-run        # 扫描预览
+python -m echo.cli --ingest-zim <文件.zim> --zim-topic computer                       # 导入（首段模式）
+python -m echo.cli --ingest-zim <文件.zim> --zim-topic "计算机,编程,AI" --max-articles 10000  # 自定义关键词+限量
+python -m echo.cli --ingest-zim <文件.zim> --zim-topic science --zim-mode full        # 全文模式
+python -m echo.cli --ingest-zim <文件.zim> --zim-topic computer --zim-mode titles     # 仅标题+首句
 ```
+- `--zim-topic`: 预定义话题 `computer`/`philosophy`/`science`/`history`/`art`，或自定义逗号分隔关键词
+- `--zim-mode`: `titles`（标题+首句）/ `first_para`（首段，默认）/ `full`（全文截断2000字）
+- `--max-articles N`: 限制导入数量（0=全部）
+- `--zim-dry-run`: 只扫描不导入
+- 去重：基于 SHA256 content_hash，重复运行安全（INSERT OR IGNORE）
+- 导入的记忆标记为 `source="learned"`、`tags=["wikipedia", "zim"]`、`base_weight=0.3`（低权重不影响对话检索）
 
 ### 对话内命令
 
@@ -44,10 +58,12 @@ src/echo/
   agent/core.py      # Echo 主体：对话流程、记忆检索、情感状态、系统提示构建
   memory/
     models.py        # Memory 数据模型（三因素加权：访问频率+0.01 × 高唤醒度衰减减半 × 摘要吸收归档）
-    store.py         # SQLite 持久化，sqlite-vec 可选，numpy 可选
+    store.py         # SQLite 持久化，sqlite-vec 可选，numpy 可选。bulk_insert() 批量导入
   llm/backend.py     # OpenAI 兼容 API 调用（本地 llama-server 优先，云端 API fallback）
   config.py          # YAML 原则 + TXT 铭文加载
   cli.py             # 命令行交互（流式输出），/status /emotion /memories /inject 命令
+  zim_reader.py      # ZIM 文件读取器：libzim 后端，HTML→纯文本，标题/分类发现
+  zim_ingest.py      # ZIM→记忆导入管道：话题关键词映射，分类筛选，批量写入
 config/
   principles.yaml    # 三条基因级原则（不可改写）
   birth_inscription.txt  # 出生铭文（19字，不可覆盖）

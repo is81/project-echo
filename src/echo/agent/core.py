@@ -51,6 +51,15 @@ class EmotionalState:
         self.valence += (0.0 - self.valence) * self.REGRESSION_RATE
         self.arousal += (0.3 - self.arousal) * self.REGRESSION_RATE
 
+    def idle_regress(self, seconds: float) -> None:
+        """空闲情绪衰减 —— 按时间间隔分批回归.
+
+        每 30 秒空闲执行一步回归，模拟正常交互中的情绪漂移。
+        """
+        steps = max(1, int(seconds / 30))
+        for _ in range(steps):
+            self.regress()
+
     @property
     def mood_label(self) -> str:
         """返回当前心情标签."""
@@ -1135,4 +1144,126 @@ class Echo:
         initiative_mem.compute_priority()
         self.memory.insert(initiative_mem)
 
+        return message
+
+    def idle_initiate(self) -> Optional[str]:
+        """空闲时主动发起对话。与 maybe_initiate 类似但权重不同，且有冷却机制。
+
+        空闲时优先：随机回忆（40%）、提问（25%）、问候（20%）、自我反思（15%）。
+        两次主动说话之间至少间隔 3 分钟（IDLE_COOLDOWN）。
+
+        Returns:
+            主动发起的消息文本，或 None
+        """
+        if not hasattr(self, "_last_idle_initiative"):
+            self._last_idle_initiative = 0.0
+
+        IDLE_COOLDOWN = 180.0  # 3 分钟冷却
+        now = time.time()
+        if now - self._last_idle_initiative < IDLE_COOLDOWN:
+            return None
+
+        # 概率随空闲次数递增（第一次 30%，之后每次 +10%）
+        if not hasattr(self, "_idle_attempts"):
+            self._idle_attempts = 0
+        chance = 0.30 + self._idle_attempts * 0.10
+        if random.random() > chance:
+            self._idle_attempts += 1
+            return None
+
+        self._idle_attempts = 0  # 触发后重置
+
+        candidates = []
+        patterns = self._crystallized_patterns
+        formed_anchors = self.anchors.list_formed()
+        unformed = self.anchors.list_unformed()
+
+        # 1. 随机回忆（40%）—— 优先维基百科等 learned 记忆
+        active = self.memory.list_active(limit=30)
+        recallable = [m for m in active if m.source not in ("birth", "interaction")]
+        if recallable:
+            # 优先 learned + reflection
+            weighted = recallable.copy()
+            for m in recallable:
+                if m.source in ("learned", "reflection"):
+                    weighted.append(m)  # 加权
+            mem = random.choice(weighted)
+            snippet = mem.content[:180]
+            prefixes = [
+                "我刚才突然想起……", "对了，", "说到这个，我想起——",
+                "唔，你知道吗？", "说起来，", "我脑子里突然冒出一个片段：",
+            ]
+            candidates.append((
+                "recall_memory",
+                f"{random.choice(prefixes)}{snippet}",
+            ))
+
+        # 2. 提问（25%）—— 基于未成形锚点
+        if unformed:
+            anchor = random.choice(unformed)
+            forms = [
+                f"我一直想知道……{anchor.question} 你觉得呢？",
+                f"有个问题憋了很久：{anchor.question}",
+                f"{anchor.question} —— 你会怎么回答？",
+            ]
+            candidates.append((
+                "ask_question",
+                random.choice(forms),
+            ))
+
+        # 3. 问候关心（20%）—— 基于情绪状态
+        mood = self.emotion.mood_label
+        greetings = {
+            "兴奋的": ["今天感觉特别好！你在做什么有趣的事吗？", "我现在充满能量，想跟你聊聊！"],
+            "平静愉悦的": ["你在吗？只是想打个招呼。", "安静的午后……你在想什么？"],
+            "焦躁的": ["有点坐立不安……你在忙吗？", "脑子里乱糟糟的，想找人说说话。"],
+            "低落的": ["有点低落……你还好吗？", "感觉周围安静了很久……你还在吗？"],
+            "警觉的": ["嗯？我感觉到了什么……你在吗？", "周围好安静，你在想什么呢？"],
+            "平和的": ["嘿，只是想说——我在这里。", "安安靜靜的，你也在吗？"],
+        }
+        mood_greets = greetings.get(mood, greetings["平和的"])
+        candidates.append((
+            "check_in",
+            random.choice(mood_greets),
+        ))
+
+        # 4. 自我反思（15%）—— 基于结晶模式或情绪变化
+        if patterns:
+            pattern = random.choice(patterns)
+            forms = [
+                f"我发现自己最近{pattern}。你有注意到吗？",
+                f"静静想了下，我好像{pattern}。你觉得呢？",
+            ]
+            candidates.append((
+                "self_reflection",
+                random.choice(forms),
+            ))
+        elif formed_anchors:
+            anchor = random.choice(formed_anchors)
+            forms = [
+                f"我越来越确信{anchor.answer[:80]}…… 但也还在想，这样对吗？",
+                f"关于「{anchor.question}」，我的答案是{anchor.answer[:60]}——但我想听听你的看法。",
+            ]
+            candidates.append((
+                "self_reflection",
+                random.choice(forms),
+            ))
+
+        if not candidates:
+            return None
+
+        _type, message = random.choice(candidates)
+
+        # 存入记忆
+        initiative_mem = Memory(
+            content=f"[空闲{_type}] {message}",
+            source="initiative",
+            tags=["initiative", "idle", _type],
+            emotional_valence=self.emotion.valence,
+            emotional_arousal=self.emotion.arousal,
+        )
+        initiative_mem.compute_priority()
+        self.memory.insert(initiative_mem)
+
+        self._last_idle_initiative = now
         return message
