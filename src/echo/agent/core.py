@@ -23,6 +23,7 @@ from ..memory.models import Memory
 from ..memory.priority import select_core_memories
 from ..memory.store import MemoryStore
 from ..memory.summarizer import compress_memories
+from ..planning.planner import PlanEngine, Plan, Step, StepStatus
 from ..review.critique import CritiqueEngine
 from ..tools import tool_registry
 from ..tools.builtin import register_builtin_tools
@@ -120,6 +121,10 @@ class Echo:
     critique_engine: Optional[CritiqueEngine] = None
     _critique_enabled: bool = True     # 可通过配置关闭
 
+    # 规划模块（Prefrontal Cortex）
+    plan_engine: Optional[PlanEngine] = None
+    _active_plan: Optional[Plan] = None  # 当前正在执行的计划
+
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
     TEMPERATURE_MIN: float = 0.7
@@ -175,6 +180,14 @@ class Echo:
                 emotional_state=self.emotion,
                 anchors=self.anchors,
                 enabled=self._critique_enabled,
+            )
+
+        # 初始化规划模块
+        if self.plan_engine is None:
+            tool_schemas = tool_registry.to_openai_tools() if tool_registry else []
+            self.plan_engine = PlanEngine(
+                llm_backend=self.llm,
+                available_tools=tool_schemas,
             )
 
         # 预加载核心记忆
@@ -402,6 +415,19 @@ class Echo:
         messages.append({"role": "user", "content": user_input})
 
         tools = tool_registry.to_openai_tools()
+
+        # ── 规划模块: 检测是否需要分解任务 ──
+        active_plan = None
+        if self.plan_engine and self._should_plan(user_input):
+            active_plan = self.plan_engine.decompose(
+                goal=user_input,
+                context=f"当前心情: {self.emotion.mood_label}。"
+                       f"活跃记忆数: {self.memory.count()}。",
+            )
+            if active_plan and active_plan.total_steps > 1:
+                self.stream.add_monologue(
+                    f"（思考: 这个任务需要 {active_plan.total_steps} 步来完成）"
+                )
 
         # ── 工具调用循环 ──
         MAX_TOOL_ROUNDS = 2
@@ -1105,6 +1131,34 @@ class Echo:
             pass
 
         return draft  # 兜底：返回原始草稿
+
+    def _should_plan(self, user_input: str) -> bool:
+        """启发式判断是否需要启动规划模块.
+
+        简单问候、闲聊不触发规划。复杂任务（优化、分析、搜索、多步骤）触发。
+        """
+        # 长度太短 → 不规划
+        if len(user_input) < 10:
+            return False
+
+        # 规划触发关键词
+        plan_triggers = [
+            "优化", "分析", "比较", "重构", "检查", "排查",
+            "搜索", "查找", "总结", "整理", "规划", "设计",
+            "帮我", "怎么", "如何", "为什么", "原因", "方案",
+            "改进", "建议", "评估", "修复",
+        ]
+
+        # 闲聊抑制关键词（有这些词时不触发规划）
+        chat_suppressors = [
+            "你好", "再见", "谢谢", "你是谁", "回响",
+            "晚安", "早安", "嗨", "哈喽",
+        ]
+
+        has_trigger = any(t in user_input for t in plan_triggers)
+        has_suppressor = any(s in user_input for s in chat_suppressors)
+
+        return has_trigger and not has_suppressor
 
     # --- 情感更新 ---
 
