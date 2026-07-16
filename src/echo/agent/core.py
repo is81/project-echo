@@ -17,6 +17,10 @@ from typing import Optional
 from ..config import load_birth_inscription, load_principles
 from ..consciousness.anchors import AnchorRegistry, load_anchors_from_config
 from ..consciousness.crystallize import CrystallizationEngine
+from ..consciousness.modulator import (
+    ModuleParams, compute_modulation,
+    modulate_review_threshold, modulate_planning_steps,
+)
 from ..consciousness.stream import ConsciousnessStream
 from ..llm.backend import LLMBackend
 from ..memory.models import Memory
@@ -124,6 +128,9 @@ class Echo:
     # 规划模块（Prefrontal Cortex）
     plan_engine: Optional[PlanEngine] = None
     _active_plan: Optional[Plan] = None  # 当前正在执行的计划
+
+    # 情绪调制器（Limbic System → 各模块权重偏移）
+    _module_params: Optional[ModuleParams] = None
 
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
@@ -384,6 +391,14 @@ class Echo:
             self.memory.apply_half_life(hours_since_start)
             self._session_start = now
         self.emotion.regress()
+
+        # 计算情绪调制参数（Limbic System → 各模块）
+        self._module_params = compute_modulation(self.emotion)
+        self.stream.add_monologue(
+            f"（情绪: {self.emotion.mood_label}, "
+            f"审查严格度: {self._module_params.review_strictness:.2f}, "
+            f"规划激进: {self._module_params.planning_aggressiveness:.2f}）"
+        )
 
         # 重置本轮意识流
         self.stream.reset_round()
@@ -1067,6 +1082,7 @@ class Echo:
           - 基础值 0.8
           - 情感唤醒度偏移: 高唤醒 → 更随机 (+0.1)
           - 记忆活跃度偏移: 记忆多 → 更稳定 (-0.05)
+          - 情绪调制器偏移（Limbic System → language_temperature_bias）
           - 随机抖动: ±0.03
         """
         t = self.BASE_TEMPERATURE
@@ -1078,6 +1094,10 @@ class Echo:
         active_count = self.memory.count()
         if active_count > 50:
             t -= 0.05
+
+        # 情绪调制器额外偏移（Limbic System 硬化）
+        if self._module_params:
+            t += self._module_params.language_temperature_bias
 
         # 随机微小抖动（产生风格差异的来源之一）
         t += random.uniform(-0.03, 0.03)
@@ -1091,15 +1111,29 @@ class Echo:
         """审查 LLM 草稿，必要时修正后返回.
 
         审查模块的插入点：语言模块生成草稿后、输出给用户前。
+        情绪调制：高 arousal → 审查更严格（阈值降低）。
         """
         if not self.critique_engine or not self._critique_enabled:
             return draft
+
+        # 情绪调制：调整审查严格度
+        if self._module_params:
+            modulated_threshold = modulate_review_threshold(
+                self.critique_engine.PASS_THRESHOLD,
+                self._module_params,
+            )
+            original_threshold = self.critique_engine.PASS_THRESHOLD
+            self.critique_engine.PASS_THRESHOLD = modulated_threshold
 
         result = self.critique_engine.critique(
             draft=draft,
             user_input=user_input,
             system_prompt=system_prompt,
         )
+
+        # 恢复原始阈值
+        if self._module_params:
+            self.critique_engine.PASS_THRESHOLD = original_threshold
 
         if result.verdict == "pass":
             return draft
@@ -1196,6 +1230,14 @@ class Echo:
             "anchors_formed": len(self.anchors.list_formed()),
             "crystallized_patterns": len(self._crystallized_patterns),
             "stream_active_anchors": self.stream.active_anchor_ids[:5],
+            "critique": self.critique_engine.stats() if self.critique_engine else {},
+            "module_params": {
+                "review_strictness": round(self._module_params.review_strictness, 2),
+                "memory_emotional_boost": round(self._module_params.memory_emotional_boost, 2),
+                "planning_aggressiveness": round(self._module_params.planning_aggressiveness, 2),
+                "tool_risk_tolerance": round(self._module_params.tool_risk_tolerance, 2),
+                "language_temperature_bias": round(self._module_params.language_temperature_bias, 3),
+            } if self._module_params else {},
         }
 
     def inject_memory(self, content: str, tags: list[str] | None = None) -> str:
