@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from collections.abc import Iterator
 from typing import Optional
 
+from ..bus import ModuleBus
 from ..config import load_birth_inscription, load_principles
 from ..consciousness.anchors import AnchorRegistry, load_anchors_from_config
 from ..consciousness.crystallize import CrystallizationEngine
@@ -132,6 +133,9 @@ class Echo:
     # 情绪调制器（Limbic System → 各模块权重偏移）
     _module_params: Optional[ModuleParams] = None
 
+    # 认知总线（模块协调层）
+    _bus: Optional[ModuleBus] = None
+
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
     TEMPERATURE_MIN: float = 0.7
@@ -196,6 +200,18 @@ class Echo:
                 llm_backend=self.llm,
                 available_tools=tool_schemas,
             )
+
+        # 初始化认知总线 + 注册所有模块
+        self._bus = ModuleBus()
+        self._bus.register("linguistic", self.llm, category="cognitive")
+        self._bus.register("memory", self.memory, category="cognitive")
+        self._bus.register("tools", tool_registry, category="cognitive")
+        self._bus.register("review", self.critique_engine, category="cognitive")
+        self._bus.register("planning", self.plan_engine, category="cognitive")
+        self._bus.register("emotion", self.emotion, category="consciousness")
+        self._bus.register("consciousness", self.stream, category="consciousness")
+        self._bus.register("anchors", self.anchors, category="consciousness")
+        self._bus.wake_all()
 
         # 预加载核心记忆
         self._core_memories = self._load_core_memories()
@@ -279,6 +295,10 @@ class Echo:
         except Exception:
             pass
 
+        # 通过总线关闭所有模块
+        if self._bus:
+            self._bus.shutdown()
+
         self.memory.close()
 
     def _load_core_memories(self) -> list[Memory]:
@@ -357,6 +377,10 @@ class Echo:
         # 9. 更新对话历史
         self._history.append({"role": "user", "content": user_input})
         self._history.append({"role": "echo", "content": final_text})
+
+        # 10. 总线 tick：各模块执行维护
+        if self._bus:
+            self._bus.tick_all()
         if len(self._history) > 50:
             self._history = self._history[-50:]
 
@@ -1219,7 +1243,8 @@ class Echo:
     def status(self) -> dict:
         """返回 Echo 完整内部状态（静默观察模式界面）."""
         return {
-            "version": "0.2.0",
+            "version": "0.3.0",
+            "architecture": "six-module cognitive bus",
             "memory_count": self.memory.count(),
             "interaction_count": self._interaction_count,
             "emotion": self.emotion.to_dict(),
@@ -1229,6 +1254,7 @@ class Echo:
             "anchors_total": len(self.anchors),
             "anchors_formed": len(self.anchors.list_formed()),
             "crystallized_patterns": len(self._crystallized_patterns),
+            "bus_modules": self._bus.list_modules() if self._bus else [],
             "stream_active_anchors": self.stream.active_anchor_ids[:5],
             "critique": self.critique_engine.stats() if self.critique_engine else {},
             "module_params": {
