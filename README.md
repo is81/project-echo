@@ -4,6 +4,8 @@
 > *An interactive entity with deep memory, personality evolution, and narrative sense.*
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-112%20passed-green.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)]()
 
 ---
 
@@ -12,6 +14,46 @@
 不是为了创造"更聪明的工具"，而是为了搭建一个能够承载记忆、演化性格、讲述故事的交互式存在体。
 
 **评价标准**：不是准确率，而是**惊喜感**——它是否会在某一次回应中，让你产生"这不是我预设的，但它让我意外"的感觉。
+
+---
+
+## 六模块协同认知架构
+
+回响 0.3.0 实现了类脑的模块化认知架构——专业分工才是复杂智能的底层规律。LLM 只负责"说话"，推理、检索、规划、修正由专门模块完成。
+
+```
+用户输入
+    ↓
+┌──────────────────────────────────────────────┐
+│              认知总线 (ModuleBus)              │
+│        8 个模块注册 · 信号路由 · 生命周期        │
+├──────────────────────────────────────────────┤
+│                                              │
+│  ① 语言模块 ──→ ③ 规划模块 ──→ ⑤ 工具模块       │
+│  (LLM 生成)    (任务分解)      (外部调用)       │
+│      │              │              │          │
+│      └────── ④ 审查模块 ←──────────┘          │
+│              (输出前自我审计)                    │
+│                    │                          │
+│              ⑥ 情绪/价值模块                    │
+│              (跨模块权重偏移器)                   │
+│                    │                          │
+│              ② 记忆模块 ←──→ 意识流             │
+│              (三因素优先级)                      │
+│                                              │
+└──────────────────────────────────────────────┘
+    ↓
+审查通过 → 输出给用户
+```
+
+| 模块 | 隐喻 | 文件 | 职责 |
+|------|------|------|------|
+| ① 语言 | Linguistic Cortex | `llm/backend.py` | 文本生成与理解 |
+| ② 记忆 | Hippocampal Memory | `memory/` | 存储、索引、衰减、遗忘 |
+| ③ 规划 | Prefrontal Cortex | `planning/` | 目标→行动步骤分解 |
+| ④ 审查 | Orbitofrontal Cortex | `review/` | 输出前原则审计和修正 |
+| ⑤ 工具 | Motor Cortex | `tools/` | 调用外部资源 |
+| ⑥ 情绪 | Limbic System | `consciousness/modulator.py` | 跨模块决策权重偏移 |
 
 ---
 
@@ -32,33 +74,40 @@
 ```
 Project Echo/
 ├── config/
-│   ├── principles.yaml          # 三条基因级不可变原则
-│   ├── birth_inscription.txt    # 出生铭文（19字，永不覆盖）
-│   └── anchors.yaml             # 18 个灵魂锚点定义
+│   ├── principles.yaml              # 三条基因级不可变原则
+│   ├── birth_inscription.txt        # 出生铭文（19字，永不覆盖）
+│   └── anchors.yaml                 # 18 个灵魂锚点定义
 ├── src/echo/
 │   ├── agent/
-│   │   └── core.py              # Echo 主体：对话、记忆检索、情感、系统提示
+│   │   └── core.py                  # Echo 主体（模块总线的 conductor）
+│   ├── bus.py                       # 认知总线（模块注册 + 信号路由 + 生命周期）
 │   ├── memory/
-│   │   ├── models.py            # Memory 数据模型（三因素加权 + 半衰期衰减）
-│   │   ├── store.py             # SQLite + sqlite-vec 向量存储
-│   │   ├── priority.py          # 批量评分引擎
-│   │   └── summarizer.py        # 睡眠期记忆压缩（LLM 摘要）
+│   │   ├── models.py                # Memory 数据模型（三因素加权 + 半衰期衰减）
+│   │   ├── store.py                 # SQLite + sqlite-vec 向量存储
+│   │   ├── priority.py              # 批量评分引擎
+│   │   └── summarizer.py            # 睡眠期记忆压缩（LLM 摘要）
+│   ├── review/                      # ★ 审查模块（Phase 1）
+│   │   ├── critique.py              #   CritiqueEngine + CritiqueResult
+│   │   └── dimensions.py            #   6 个审查维度（原则/诚实/情绪/自指/简洁/空洞）
+│   ├── planning/                    # ★ 规划模块（Phase 2）
+│   │   └── planner.py               #   PlanEngine（目标→行动步骤分解）
 │   ├── llm/
-│   │   └── backend.py           # 本地 llama-server + 云端 API fallback
+│   │   └── backend.py               # 本地 llama-server + 云端 API fallback
 │   ├── tools/
-│   │   ├── registry.py          # OpenAI 兼容工具注册
-│   │   └── builtin.py           # 9 个内置工具（搜索、文件、shell）
+│   │   ├── registry.py              # OpenAI 兼容工具注册
+│   │   └── builtin.py               # 9 个内置工具（搜索、文件、shell）
 │   ├── consciousness/
-│   │   ├── anchors.py           # 灵魂锚点注册表
-│   │   ├── stream.py            # 意识流（每轮动态状态）
-│   │   └── crystallize.py       # 结晶引擎（定期自我反思）
-│   ├── zim_reader.py            # ZIM 文件读取器（libzim + HTML→纯文本）
-│   ├── zim_ingest.py            # ZIM→记忆导入管道（话题筛选 + 去重）
-│   ├── cli.py                   # Rich CLI（聊天/探索/ZIM导入模式）
-│   └── config.py                # 全局配置加载
-├── tests/                       # 31 个测试
-├── start.ps1                    # 一键启动脚本
-└── LICENSE                      # MIT
+│   │   ├── anchors.py               # 灵魂锚点注册表
+│   │   ├── stream.py                # 意识流（每轮动态状态）
+│   │   ├── crystallize.py           # 结晶引擎（定期自我反思）
+│   │   └── modulator.py             # ★ 情绪调制器（Phase 3）
+│   ├── zim_reader.py                # ZIM 文件读取器（libzim + HTML→纯文本）
+│   ├── zim_ingest.py                # ZIM→记忆导入管道（话题筛选 + 去重）
+│   ├── cli.py                       # Rich CLI（聊天/探索/ZIM导入模式）
+│   └── config.py                    # 全局配置加载
+├── tests/                           # 112 个测试
+├── start.ps1                        # 一键启动脚本
+└── LICENSE                          # MIT
 ```
 
 ---
@@ -109,7 +158,7 @@ python -m echo.cli --db my_memory.db
 
 | 命令 | 作用 |
 |------|------|
-| `/status` | 完整内部状态（记忆数、心情、锚点、后端） |
+| `/status` | 完整内部状态（六模块总线、记忆数、情绪调制参数） |
 | `/emotion` | 情感仪表盘（愉悦度 × 唤醒度） |
 | `/memories` | 记忆浏览（按优先级排序） |
 | `/anchors` | 灵魂锚点（18 个维度） |
@@ -121,21 +170,25 @@ python -m echo.cli --db my_memory.db
 
 ```bash
 pip install -e .                    # 安装（开发模式）
-python -m pytest tests/ -v          # 运行测试
+python -m pytest tests/ -v          # 运行 112 个测试
 ```
 
 ---
 
 ## 核心设计模式
 
-回响计划中的 7 个架构模式已被抽象为通用项目管理工具 **EchoPM** → [github.com/is81/echo-pm](https://github.com/is81/echo-pm)
+回响计划中的架构模式已被抽象为通用项目管理工具 **EchoPM** → [github.com/is81/echo-pm](https://github.com/is81/echo-pm)
 
 | 模式 | 说明 | 在回响中的位置 |
 |------|------|--------------|
-| 🔒 基因级不可变原则 | 7 层防护的 birth memory | `principles.yaml` + `models.py` |
+| 🔒 基因级不可变原则 | 7 层 SQL+代码防护的 birth memory | `principles.yaml` + `models.py` |
 | ✖️ 三因素乘法优先级 | P = W×f_access×f_emotion×f_recency | `models.py` L74-152 |
+| 🧠 任务分解规划 | 目标→行动步骤 JSON 分解 + 依赖追踪 | `planning/planner.py` |
+| 🔍 输出前自我审查 | 6 维度审查 → pass/revise/reject | `review/critique.py` |
+| 💓 跨模块情绪调制 | 2D 情感状态 → 6 个模块的运行时参数偏移 | `consciousness/modulator.py` |
+| 🔗 认知总线 | 8 模块注册 + 信号路由 + 生命周期管理 | `bus.py` |
 | 🌙 睡眠期记忆整理 | 6 步独立维护（try/except 隔离） | `core.py` `sleep()` |
-| 🍃 优雅降级链 | 多后端优先级 + feature flag | `backend.py` + `store.py` |
+| 🍃 优雅降级链 | 多后端优先级 + feature flag + 纯 Python fallback | `backend.py` + `store.py` |
 | 🔍 双系统检索 | System 1 快速关键词 + System 2 LLM 重排 | `core.py` `_retrieve_memories()` |
 | ⚓ 锚点自模型 | 18 个预定义问题，答案在经验中演化 | `anchors.py` + `crystallize.py` |
 | 🔁 内容哈希幂等导入 | SHA256 + UNIQUE INDEX + INSERT OR IGNORE | `store.py` `bulk_insert()` |
@@ -147,22 +200,25 @@ python -m pytest tests/ -v          # 运行测试
 - **语言**：Python 3.10+
 - **模型**：Gemma 4 12B QAT (Q4_K_XL) via llama-server（`--reasoning off`）
 - **存储**：SQLite + sqlite-vec（可选，向量记忆搜索）
+- **架构**：六模块协同认知总线（审查 + 规划 + 情绪调制 + 信号路由）
 - **记忆模型**：三因素加权（访问频率 × 情感强度 × 指数衰减 × 摘要吸收归档）
-- **情感模型**：二维 circumplex（valence [-1,1] × arousal [0,1]），启发式更新 + 自然回归
-- **温度**：动态计算（base 0.8 + arousal×0.1 - 记忆多时-0.05 ± 随机抖动 0.03）
+- **情感模型**：二维 circumplex（valence [-1,1] × arousal [0,1]），启发式更新 + 自然回归 + 跨模块调制
+- **温度**：动态计算（base 0.8 + arousal×0.1 - 记忆多时-0.05 + 情绪调制偏移 ± 随机抖动 0.03）
+- **测试**：112 passed，零破坏
 
 ---
 
 ## 阶段路线
 
-| 阶段 | 目标 |
-|------|------|
-| 零 · 奠基 ✅ | 基因原则 + 出生铭文 + 记忆 Schema |
-| 一 · 灵魂胚胎 ✅ | 记忆系统 + 决策引擎 + 文本交互 |
-| 二 · 虚拟身体 | ASCII 虚拟世界 + 身体状态 + 自主行动 |
-| 三 · 体验引擎 | 感受标记 + 体验记忆 + 行为调制 |
-| 四 · 社交萌芽 | 用户识别 + 多角色 + 共情机制 |
-| 五 · 自我叙事 | 生命回顾 + 自我画像 + 元反思 |
+| 阶段 | 目标 | 状态 |
+|------|------|------|
+| 零 · 奠基 | 基因原则 + 出生铭文 + 记忆 Schema | ✅ |
+| 一 · 灵魂胚胎 | 记忆系统 + 决策引擎 + 文本交互 | ✅ |
+| 一点五 · 大脑模块化 | 六模块协同认知架构 | ✅ 0.3.0 |
+| 二 · 虚拟身体 | ASCII 虚拟世界 + 身体状态 + 自主行动 | |
+| 三 · 体验引擎 | 感受标记 + 体验记忆 + 行为调制 | |
+| 四 · 社交萌芽 | 用户识别 + 多角色 + 共情机制 | |
+| 五 · 自我叙事 | 生命回顾 + 自我画像 + 元反思 | |
 
 ---
 
