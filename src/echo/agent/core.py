@@ -23,6 +23,7 @@ from ..memory.models import Memory
 from ..memory.priority import select_core_memories
 from ..memory.store import MemoryStore
 from ..memory.summarizer import compress_memories
+from ..review.critique import CritiqueEngine
 from ..tools import tool_registry
 from ..tools.builtin import register_builtin_tools
 
@@ -115,6 +116,10 @@ class Echo:
     _self_portrait: str = ""          # 最新自我画像
     _crystallized_patterns: list[str] = field(default_factory=list)
 
+    # 审查模块（Orbitofrontal Cortex）
+    critique_engine: Optional[CritiqueEngine] = None
+    _critique_enabled: bool = True     # 可通过配置关闭
+
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
     TEMPERATURE_MIN: float = 0.7
@@ -162,6 +167,15 @@ class Echo:
         self.stream = ConsciousnessStream()
         self.crystallizer = CrystallizationEngine()
         self._crystallized_patterns = []
+
+        # 初始化审查模块
+        if self.critique_engine is None:
+            self.critique_engine = CritiqueEngine(
+                principles=self._principles,
+                emotional_state=self.emotion,
+                anchors=self.anchors,
+                enabled=self._critique_enabled,
+            )
 
         # 预加载核心记忆
         self._core_memories = self._load_core_memories()
@@ -300,9 +314,16 @@ class Echo:
             temperature=temperature,
         )
 
+        # 6.5. 审查模块介入：检查草稿是否违反原则
+        final_text = self._review_response(
+            draft=llm_response.text,
+            user_input=user_input,
+            system_prompt=system_prompt,
+        )
+
         # 7. 记录本次交互为记忆
         interaction_memory = Memory(
-            content=f"用户: {user_input}\n回响: {llm_response.text}",
+            content=f"用户: {user_input}\n回响: {final_text}",
             source="interaction",
             tags=["conversation"],
             emotional_valence=self.emotion.valence,
@@ -311,16 +332,16 @@ class Echo:
         self.memory.insert(interaction_memory)
 
         # 8. 更新情感状态（基于简单启发式）
-        self._update_emotion(user_input, llm_response.text)
+        self._update_emotion(user_input, final_text)
 
         # 9. 更新对话历史
         self._history.append({"role": "user", "content": user_input})
-        self._history.append({"role": "echo", "content": llm_response.text})
+        self._history.append({"role": "echo", "content": final_text})
         if len(self._history) > 50:
             self._history = self._history[-50:]
 
         return {
-            "text": llm_response.text,
+            "text": final_text,
             "mood": self.emotion.mood_label,
             "memories_used": len(relevant_memories),
             "temperature": round(temperature, 3),
@@ -455,6 +476,13 @@ class Echo:
         # 如果循环结束仍无文本（兜底）
         if not final_text:
             final_text = "（我想了想，但不知道该怎么回应。）"
+
+        # 审查模块介入：检查草稿
+        final_text = self._review_response(
+            draft=final_text,
+            user_input=user_input,
+            system_prompt=system_prompt,
+        )
 
         # 流式输出最终文本
         for char in final_text:
@@ -1029,6 +1057,54 @@ class Echo:
         t += random.uniform(-0.03, 0.03)
 
         return max(self.TEMPERATURE_MIN, min(self.TEMPERATURE_MAX, t))
+
+    # --- 审查模块集成 ---
+
+    def _review_response(self, draft: str, user_input: str = "",
+                         system_prompt: str = "") -> str:
+        """审查 LLM 草稿，必要时修正后返回.
+
+        审查模块的插入点：语言模块生成草稿后、输出给用户前。
+        """
+        if not self.critique_engine or not self._critique_enabled:
+            return draft
+
+        result = self.critique_engine.critique(
+            draft=draft,
+            user_input=user_input,
+            system_prompt=system_prompt,
+        )
+
+        if result.verdict == "pass":
+            return draft
+
+        if result.verdict == "revise":
+            revised = self.critique_engine.revise(
+                draft=draft,
+                result=result,
+                llm_backend=self.llm if self.critique_engine.mode == "llm" else None,
+            )
+            if revised and revised != draft:
+                return revised
+            return draft
+
+        # reject: 完全重建
+        try:
+            if self.llm:
+                retry = self.llm.generate(
+                    prompt=user_input,
+                    system_prompt=(system_prompt
+                        + "\n\n⚠️ 注意：你上一轮回复被审查拒绝。问题："
+                        + "; ".join(result.concerns)
+                        + "\n请重新回复，避免这些问题。"),
+                    temperature=self._compute_temperature(),
+                )
+                if retry.text and len(retry.text.strip()) > 5:
+                    return retry.text
+        except Exception:
+            pass
+
+        return draft  # 兜底：返回原始草稿
 
     # --- 情感更新 ---
 
