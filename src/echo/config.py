@@ -27,3 +27,29 @@ def load_birth_inscription() -> str:
         raise FileNotFoundError(f"出生铭文文件不存在: {path}")
     with open(path, "r", encoding="utf-8") as f:
         return f.read().strip()
+
+
+def load_module_config() -> dict[str, Any]:
+    """加载六模块配置."""
+    path = CONFIG_DIR / "modules.yaml"
+    if not path.exists():
+        # 返回默认值，优雅降级
+        return {
+            "review": {"enabled": True, "mode": "heuristic"},
+            "planning": {"enabled": True, "max_steps": 5, "auto_execute": True},
+            "modulator": {"enabled": True},
+            "anomaly": {"enabled": True, "scan_count": 50},
+        }
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data or {}
+
+
+def load_anchor_definitions() -> list[dict[str, Any]]:
+    """加载灵魂锚点定义（config/anchors.yaml）."""
+    path = CONFIG_DIR / "anchors.yaml"
+    if not path.exists():
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data.get("anchors", []) if data else []

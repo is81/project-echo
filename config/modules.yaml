@@ -1,0 +1,76 @@
+# 六模块协同认知架构 —— 模块配置
+# Echo 0.3.0+
+
+review:
+  enabled: true               # 是否启用审查模块
+  mode: heuristic             # heuristic | llm | hybrid
+  pass_threshold: 0.75        # 总分 >= 此值 → 通过
+  revise_threshold: 0.40      # 总分 >= 此值 → 修正；低于 → 拒绝重建
+  log_verbosity: low          # low | high（high 记录所有审查详情）
+
+planning:
+  enabled: true               # 是否启用规划模块
+  max_steps: 5                # 最大步骤数
+  auto_execute: true          # 是否自动执行分解后的计划步骤
+  trigger_keywords:           # 触发规划的关键词
+    - 优化
+    - 分析
+    - 比较
+    - 重构
+    - 检查
+    - 排查
+    - 搜索
+    - 查找
+    - 总结
+    - 整理
+    - 规划
+    - 设计
+    - 帮我
+    - 怎么
+    - 如何
+    - 为什么
+    - 原因
+    - 方案
+    - 改进
+    - 建议
+    - 评估
+    - 修复
+  suppressor_keywords:        # 抑制规划的关键词（闲聊不触发）
+    - 你好
+    - 再见
+    - 谢谢
+    - 你是谁
+    - 回响
+    - 晚安
+    - 早安
+    - 嗨
+    - 哈喽
+
+modulator:
+  enabled: true               # 是否启用情绪调制
+  review_strictness_coeff: 0.3    # arousal 对审查严格度的影响
+  emotional_intensity_coeff: 0.15  # |valence| 对审查的影响
+  memory_emotional_boost_coeff: 0.3  # |valence| 对记忆权重的影响
+  planning_aggressiveness_coeff: 0.2  # arousal 对规划激进的影响
+  anxiety_valence_threshold: -0.2    # 焦虑 valence 阈值
+  anxiety_arousal_threshold: 0.5      # 焦虑 arousal 阈值
+  excitement_arousal_threshold: 0.6   # 兴奋 arousal 阈值
+  risk_aversion_valence_threshold: -0.3  # 风险厌恶 valence 阈值
+  curiosity_base: 1.0                # 好奇心基础值
+  curiosity_valence_coeff: 0.3       # valence 对好奇心影响
+  curiosity_arousal_coeff: 0.2       # arousal 对好奇心影响
+
+memory:
+  half_life_default_hours: 168       # 默认半衰期（7天）
+  half_life_high_arousal_hours: 336  # 高唤醒半衰期（14天）
+  forget_threshold: 0.05             # 遗忘阈值
+  base_weight_initial: 0.5           # 初始权重
+  base_weight_cap: 1.0               # 权重上限
+  access_boost: 0.02                 # 每次访问的权重增量
+
+anomaly:
+  enabled: true               # 是否启用异常检测（sleep 时运行）
+  scan_count: 50              # 每次扫描最近的 N 条记忆
+  emotion_threshold: 0.6      # 情感强度阈值（|valence| + arousal）
+  valence_jump_threshold: 0.5 # 情绪突变检测阈值
+  rare_tag_threshold: 3       # 标签出现 < 此值视为罕见

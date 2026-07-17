@@ -62,7 +62,8 @@ class CritiqueEngine:
     CONCERN_SCORE_THRESHOLD = 0.6  # 单维度低于此分 → 记录 concern
 
     def __init__(self, principles: list[dict], emotional_state=None,
-                 anchors=None, enabled: bool = True, mode: str = "heuristic"):
+                 anchors=None, enabled: bool = True, mode: str = "heuristic",
+                 log_path: str = ""):
         """初始化审查引擎.
 
         Args:
@@ -71,18 +72,23 @@ class CritiqueEngine:
             anchors: AnchorRegistry 实例
             enabled: 是否启用审查（可通过配置关闭）
             mode: "heuristic"（纯规则）或 "llm"（LLM 深度审查）
+            log_path: 审查日志文件路径（空字符串 = 不持久化）
         """
         self._principles = principles
         self._emotional_state = emotional_state
         self._anchors = anchors
         self.enabled = enabled
         self.mode = mode
+        self._log_path = log_path
 
         # 审查统计
         self.total_reviews = 0
         self.pass_count = 0
         self.revise_count = 0
         self.reject_count = 0
+
+        # 审查历史（内存缓存，最近 100 条）
+        self._history: list[dict] = []
 
     def critique(self, draft: str, user_input: str = "",
                  system_prompt: str = "") -> CritiqueResult:
@@ -290,11 +296,25 @@ class CritiqueEngine:
                 },
                 "draft_preview": draft[:150] + "..." if len(draft) > 150 else draft,
             }
+
+            # 内存缓存（最近 100 条）
+            self._history.append(log_entry)
+            if len(self._history) > 100:
+                self._history = self._history[-100:]
+
+            # 文件持久化
+            if self._log_path:
+                with open(self._log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
             logger.info(f"审查: {verdict} (score={total_score:.3f}) "
                        f"concerns={len(concerns)}")
-            logger.debug(json.dumps(log_entry, ensure_ascii=False, indent=2))
         except Exception:
             pass  # 日志记录失败不影响审查
+
+    def recent_logs(self, limit: int = 20) -> list[dict]:
+        """返回最近的审查日志."""
+        return self._history[-limit:]
 
     def stats(self) -> dict:
         """返回审查统计."""

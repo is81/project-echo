@@ -136,6 +136,23 @@ def _status_view(echo: Echo) -> None:
     right.add_row("唤醒度", Text(f"{e['arousal']:.2f} ") + _bar(e['arousal'], 0, 1, 16, C_WARN, C_DIM, C_ACCENT))
     right.add_row("记忆", f"{s['memory_count']} 条（会话 {s['interaction_count']} 轮）")
 
+    # 六模块信息
+    critique_s = s.get("critique", {})
+    if critique_s:
+        total_r = critique_s.get("total_reviews", 0)
+        pass_r = critique_s.get("pass_rate", 1.0)
+        right.add_row("审查", f"{total_r}次 · {pass_r:.0%} 通过" if total_r > 0 else "审查", style=C_DIM)
+
+    bus_modules = s.get("bus_modules", [])
+    if bus_modules:
+        enabled_count = sum(1 for m in bus_modules if m.get("enabled"))
+        right.add_row("模块总线", f"{enabled_count}/{len(bus_modules)} 模块活跃")
+
+    mod_params = s.get("module_params", {})
+    if mod_params:
+        right.add_row("调制", f"审查{mod_params.get('review_strictness', 1.0):.2f}× "
+                            f"规划{mod_params.get('planning_aggressiveness', 1.0):.2f}×")
+
     console.print(Columns([
         Panel(left, title="身份", border_style=C_BIRTH, box=box.SIMPLE, padding=(1,2)),
         Panel(right, title="状态", border_style=C_ECHO, box=box.SIMPLE, padding=(1,2)),

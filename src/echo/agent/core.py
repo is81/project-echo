@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from typing import Optional
 
 from ..bus import ModuleBus
-from ..config import load_birth_inscription, load_principles
+from ..config import load_birth_inscription, load_principles, load_module_config
 from ..consciousness.anchors import AnchorRegistry, load_anchors_from_config
 from ..consciousness.crystallize import CrystallizationEngine
 from ..consciousness.modulator import (
@@ -27,6 +27,8 @@ from ..llm.backend import LLMBackend
 from ..memory.models import Memory
 from ..memory.priority import select_core_memories
 from ..memory.store import MemoryStore
+from ..body import BodyState, World
+from ..memory.anomaly import detect_anomalies
 from ..memory.summarizer import compress_memories
 from ..planning.planner import PlanEngine, Plan, Step, StepStatus
 from ..review.critique import CritiqueEngine
@@ -125,6 +127,7 @@ class Echo:
     # 审查模块（Orbitofrontal Cortex）
     critique_engine: Optional[CritiqueEngine] = None
     _critique_enabled: bool = True     # 可通过配置关闭
+    _critique_mode: str = "heuristic"  # "heuristic" | "llm" | "hybrid"
 
     # 规划模块（Prefrontal Cortex）
     plan_engine: Optional[PlanEngine] = None
@@ -135,6 +138,17 @@ class Echo:
 
     # 认知总线（模块协调层）
     _bus: Optional[ModuleBus] = None
+
+    # 模块配置
+    _module_config: dict = field(default_factory=dict)
+    _planning_enabled: bool = True
+    _planning_max_steps: int = 5
+    _anomaly_enabled: bool = True
+
+    # 虚拟身体（Phase 二）
+    body: Optional[BodyState] = None
+    world: Optional[World] = None
+    _body_enabled: bool = False  # 默认关闭，通过 /body 命令激活
 
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
@@ -160,6 +174,19 @@ class Echo:
         # 载入配置
         self._birth_inscription = load_birth_inscription()
         self._principles = load_principles()
+        self._module_config = load_module_config()
+
+        # 应用模块配置
+        review_cfg = self._module_config.get("review", {})
+        self._critique_enabled = review_cfg.get("enabled", True)
+        self._critique_mode = review_cfg.get("mode", "heuristic")
+
+        planning_cfg = self._module_config.get("planning", {})
+        self._planning_enabled = planning_cfg.get("enabled", True)
+        self._planning_max_steps = planning_cfg.get("max_steps", 5)
+
+        anomaly_cfg = self._module_config.get("anomaly", {})
+        self._anomaly_enabled = anomaly_cfg.get("enabled", True)
 
         # 确保出生铭文存在
         birth = self.memory.get_birth()
@@ -191,7 +218,15 @@ class Echo:
                 emotional_state=self.emotion,
                 anchors=self.anchors,
                 enabled=self._critique_enabled,
+                mode=self._critique_mode,
             )
+
+        # 初始化虚拟身体（Phase 二）
+        if self.body is None:
+            self.body = BodyState()
+            self.world = World()
+            self._bus.register("body", self.body, category="body")
+            self._bus.register("world", self.world, category="body")
 
         # 初始化规划模块
         if self.plan_engine is None:
@@ -212,6 +247,28 @@ class Echo:
         self._bus.register("consciousness", self.stream, category="consciousness")
         self._bus.register("anchors", self.anchors, category="consciousness")
         self._bus.wake_all()
+
+        # ── 信号订阅：连接模块间的通信 ──
+        # emotion.changed → 审查模块调整阈值
+        self._bus.subscribe("emotion.changed", lambda **kw: (
+            setattr(self.critique_engine, "PASS_THRESHOLD",
+                    modulate_review_threshold(0.75, self._module_params))
+            if self.critique_engine and self._module_params else None
+        ))
+        # response.generated → 审查标记（供 review log 使用）
+        self._bus.subscribe("response.generated", lambda **kw: (
+            self.stream.add_monologue(f"（审查: {kw.get('draft', '')[:50]}...）")
+        ))
+        # knowledge.extracted → 记忆模块记录
+        self._bus.subscribe("knowledge.extracted", lambda **kw: (
+            [self.memory.insert(Memory(
+                content=f"[习得] {fact}",
+                source="learned",
+                tags=["learned", kw.get("source", "unknown")],
+                base_weight=0.35,
+            )) for fact in kw.get("facts", [])]
+            if kw.get("facts") else None
+        ))
 
         # 预加载核心记忆
         self._core_memories = self._load_core_memories()
@@ -276,6 +333,23 @@ class Echo:
                 print(f"  [探索] 自主搜索学到了 {explored} 条知识", file=sys.stderr)
         except Exception:
             pass
+
+        # 记忆异常检测
+        if self._anomaly_enabled:
+            try:
+                anomaly_cfg = self._module_config.get("anomaly", {})
+                scan = detect_anomalies(
+                    self.memory,
+                    recent_count=anomaly_cfg.get("scan_count", 50),
+                    emotion_threshold=anomaly_cfg.get("emotion_threshold", 0.6),
+                )
+                if scan.flagged > 0:
+                    import sys
+                    print(f"  [异常] 发现 {scan.flagged} 条特征记忆 "
+                          f"(高情感:{scan.high_emotion} 突变:{scan.pattern_shift} "
+                          f"罕见:{scan.rare_topic})", file=sys.stderr)
+            except Exception:
+                pass
 
         # 睡眠压缩
         try:
@@ -381,6 +455,11 @@ class Echo:
         # 10. 总线 tick：各模块执行维护
         if self._bus:
             self._bus.tick_all()
+
+        # 11. 身体 tick（Phase 二）
+        if self._body_enabled and self.body:
+            self.body.tick(seconds=5.0)
+            self.body.sync_from_emotion(self.emotion)
         if len(self._history) > 50:
             self._history = self._history[-50:]
 
@@ -467,6 +546,38 @@ class Echo:
                 self.stream.add_monologue(
                     f"（思考: 这个任务需要 {active_plan.total_steps} 步来完成）"
                 )
+                self._active_plan = active_plan
+
+                # ── 执行计划步骤 ──
+                step_results: list[str] = []
+                for step in active_plan.steps:
+                    if not step.tool_name:
+                        continue  # 思考步骤跳过
+                    try:
+                        result = tool_registry.execute(
+                            step.tool_name,
+                            step.tool_args,
+                            confirm_func=confirm_func,
+                        )
+                        step.status = StepStatus.DONE
+                        step.result = result[:500] if len(result) > 500 else result
+                        step_results.append(f"[{step.id}] {step.description}: {step.result}")
+                        tool_calls_made.append(step.tool_name)
+                    except Exception as e:
+                        step.status = StepStatus.FAILED
+                        step.result = str(e)
+                        step_results.append(f"[{step.id}] 失败: {e}")
+                        # 一个步骤失败不阻塞后续步骤（除非有依赖）
+                        continue
+
+                # 将计划执行结果注入消息，让 LLM 总结
+                if step_results:
+                    plan_summary = "\n".join(step_results)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": "plan-exec",
+                        "content": f"[计划执行结果]\n{plan_summary}\n请根据以上步骤结果，组织一段简洁的回复给用户。",
+                    })
 
         # ── 工具调用循环 ──
         MAX_TOOL_ROUNDS = 2
@@ -1140,7 +1251,11 @@ class Echo:
         if not self.critique_engine or not self._critique_enabled:
             return draft
 
-        # 情绪调制：调整审查严格度
+        # 发出信号：回应已生成
+        if self._bus:
+            self._bus.on_response_generated(draft=draft, user_input=user_input)
+
+        # 情绪调制：调整审查严格度（如果未被信号订阅者调整过）
         if self._module_params:
             modulated_threshold = modulate_review_threshold(
                 self.critique_engine.PASS_THRESHOLD,
