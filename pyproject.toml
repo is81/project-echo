@@ -3,29 +3,79 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "echo"
-version = "0.1.0"
+name = "echo-ai"
+version = "0.3.1"
 description = "回响计划 · Project Echo — 一个带有深度记忆、性格演化和叙事感的交互式存在体"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.10"
+authors = [
+    {name = "Echo Creator"},
+]
+keywords = [
+    "ai", "agent", "cognitive-architecture", "memory",
+    "personality", "emotion", "companion", "entity",
+    "llm", "chatbot", "self-evolving",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Communications :: Chat",
+]
 dependencies = [
-    "sqlite-vec>=0.1.0",
-    "openai>=1.0.0",
     "pyyaml>=6.0",
-    "pydantic>=2.0",
     "rich>=13.0",
 ]
 
 [project.optional-dependencies]
+llm = [
+    "openai>=1.0",
+]
 local = [
     "llama-cpp-python>=0.2.0",
 ]
 zim = [
     "libzim>=3.5.0",
 ]
+voice = [
+    "pyttsx3>=2.90; platform_system == 'Windows'",
+    "pywin32>=300; platform_system == 'Windows'",
+]
+graph = [
+    "networkx>=3.0",
+]
+vector = [
+    "sqlite-vec>=0.1.0",
+    "numpy>=1.24",
+]
+all = [
+    "echo-ai[llm,local,zim,voice,graph,vector]",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
 ]
 
+[project.urls]
+Homepage = "https://github.com/is81/project-echo"
+Repository = "https://github.com/is81/project-echo"
+Issues = "https://github.com/is81/project-echo/issues"
+
+[project.scripts]
+echo = "echo.cli:main"
+echo-chat = "echo.cli:main"
+echo-server = "echo.server:run_server"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"

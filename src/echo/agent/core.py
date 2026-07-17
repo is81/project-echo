@@ -30,8 +30,11 @@ from ..memory.store import MemoryStore
 from ..body import BodyState, World
 from ..memory.anomaly import detect_anomalies
 from ..memory.summarizer import compress_memories
+from ..memory.graph_store import GraphStore
+from ..memory.trauma import TraumaRegistry
 from ..personality.traits import BigFive, PersonalityEngine
 from ..social.relationship import RelationshipModel
+from ..social.theory_of_mind import TheoryOfMind, ToMReading
 from ..planning.planner import PlanEngine, Plan, Step, StepStatus
 from ..review.critique import CritiqueEngine
 from ..tools import tool_registry
@@ -158,6 +161,19 @@ class Echo:
     # 关系模型
     relationships: Optional[RelationshipModel] = None
 
+    # Theory of Mind
+    theory_of_mind: Optional[TheoryOfMind] = None
+
+    # 创伤印记
+    trauma_registry: Optional[TraumaRegistry] = None
+
+    # 图记忆
+    graph_store: Optional[GraphStore] = None
+
+    # 幽灵机制
+    _ghost_enabled: bool = False     # 是否允许回响选择不回复
+    _last_nrem_tick: float = 0.0    # 上次 NREM tick 时间戳
+
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
     TEMPERATURE_MIN: float = 0.7
@@ -238,6 +254,20 @@ class Echo:
         if self.relationships is None:
             self.relationships = RelationshipModel()
             self._bus.register("relationships", self.relationships, category="consciousness")
+
+        # 初始化 Theory of Mind
+        if self.theory_of_mind is None:
+            self.theory_of_mind = TheoryOfMind()
+
+        # 初始化创伤印记
+        if self.trauma_registry is None:
+            self.trauma_registry = TraumaRegistry()
+            self._bus.register("trauma", self.trauma_registry, category="consciousness")
+
+        # 初始化图记忆
+        if self.graph_store is None:
+            self.graph_store = GraphStore()
+            self._bus.register("graph", self.graph_store, category="cognitive")
 
         # 初始化虚拟身体（Phase 二）
         if self.body is None:
@@ -433,6 +463,28 @@ class Echo:
 
         # 2. 情感自然回归
         self.emotion.regress()
+
+        # 2.5. Theory of Mind 解读
+        tom_reading = None
+        if self.theory_of_mind:
+            tom_reading = self.theory_of_mind.read(user_input)
+
+        # 2.6. 幽灵检查: 基于 ToM + 关系决定是否回复
+        if self._ghost_enabled and tom_reading and self.relationships:
+            rel = self.relationships.get("default")
+            if self.theory_of_mind.should_ghost(tom_reading, rel):
+                return {
+                    "text": "",
+                    "mood": self.emotion.mood_label,
+                    "ghosted": True,
+                    "reason": f"关系{rel.relationship_label()}，检测到{tom_reading.hidden_emotion}",
+                }
+
+        # 2.7. NREM 空闲触发: idle > 30min → 轻量记忆维护
+        now_ts = datetime.now(timezone.utc).timestamp()
+        if now_ts - self._last_nrem_tick > 1800:  # 30 min
+            self._nrem_tick()
+            self._last_nrem_tick = now_ts
 
         # 3. 检索相关记忆
         relevant_memories = self._retrieve_memories(user_input)
@@ -1339,6 +1391,22 @@ class Echo:
             pass
 
         return draft  # 兜底：返回原始草稿
+
+    def _nrem_tick(self) -> None:
+        """NREM 轻量维护 —— 每隔 30 分钟自动触发.
+
+        不做深度反思（那是 REM/sleep 的事），只做轻量维护。
+        """
+        try:
+            # 衰减旧记忆
+            self.memory.apply_half_life(0.5)  # 半小时衰减
+            # 遗忘低优先级
+            self.memory.forget_low_priority()
+            # 关系模型衰减
+            if self.relationships:
+                self.relationships.tick_all(hours=0.5)
+        except Exception:
+            pass
 
     def _should_plan(self, user_input: str) -> bool:
         """启发式判断是否需要启动规划模块.

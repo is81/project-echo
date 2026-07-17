@@ -13,6 +13,9 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
+
+import yaml
 
 
 @dataclass
@@ -123,3 +126,39 @@ class PersonalityEngine:
             "summary": self.traits.summary(),
             "drift_count": self._drift_count,
         }
+
+
+def load_preset(preset_name: str) -> BigFive:
+    """从 config/personas/ 加载人格预设.
+
+    Args:
+        preset_name: 预设名 — "paranoid" | "secure" | "curious" | "stoic"
+
+    Returns:
+        BigFive 实例
+    """
+    preset_path = Path(__file__).parent.parent.parent.parent / "config" / "personas" / f"{preset_name}.yaml"
+    if not preset_path.exists():
+        return BigFive()  # 默认
+
+    try:
+        with open(preset_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        traits = data.get("big_five", {})
+        return BigFive(
+            openness=traits.get("openness", 0.55),
+            conscientiousness=traits.get("conscientiousness", 0.60),
+            extraversion=traits.get("extraversion", 0.35),
+            agreeableness=traits.get("agreeableness", 0.70),
+            neuroticism=traits.get("neuroticism", 0.30),
+        )
+    except Exception:
+        return BigFive()
+
+
+def list_presets() -> list[str]:
+    """列出所有可用的人格预设."""
+    personas_dir = Path(__file__).parent.parent.parent.parent / "config" / "personas"
+    if not personas_dir.exists():
+        return []
+    return [p.stem for p in personas_dir.glob("*.yaml")]
