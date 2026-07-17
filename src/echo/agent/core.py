@@ -30,6 +30,8 @@ from ..memory.store import MemoryStore
 from ..body import BodyState, World
 from ..memory.anomaly import detect_anomalies
 from ..memory.summarizer import compress_memories
+from ..personality.traits import BigFive, PersonalityEngine
+from ..social.relationship import RelationshipModel
 from ..planning.planner import PlanEngine, Plan, Step, StepStatus
 from ..review.critique import CritiqueEngine
 from ..tools import tool_registry
@@ -150,6 +152,12 @@ class Echo:
     world: Optional[World] = None
     _body_enabled: bool = False  # 默认关闭，通过 /body 命令激活
 
+    # 人格引擎（Big Five）
+    personality: Optional[PersonalityEngine] = None
+
+    # 关系模型
+    relationships: Optional[RelationshipModel] = None
+
     # 决策参数
     BASE_TEMPERATURE: float = 0.8
     TEMPERATURE_MIN: float = 0.7
@@ -221,6 +229,16 @@ class Echo:
                 mode=self._critique_mode,
             )
 
+        # 初始化人格引擎
+        if self.personality is None:
+            self.personality = PersonalityEngine(BigFive())
+            self._bus.register("personality", self.personality, category="consciousness")
+
+        # 初始化关系模型
+        if self.relationships is None:
+            self.relationships = RelationshipModel()
+            self._bus.register("relationships", self.relationships, category="consciousness")
+
         # 初始化虚拟身体（Phase 二）
         if self.body is None:
             self.body = BodyState()
@@ -283,7 +301,47 @@ class Echo:
         return self
 
     def sleep(self) -> None:
-        """休眠 Echo: 结晶反思 → 压缩记忆 → 遗忘低优先级 → 关闭数据库."""
+        """休眠 Echo: 两阶段睡眠 —— NREM 维护 + REM 深度反思.
+
+        NREM（非快速眼动）: 记忆压缩 + 主动遗忘 + 异常扫描
+        REM（快速眼动）:   锚点反思 + 模式结晶 + 自主探索
+        """
+        import sys
+
+        # ── NREM 阶段: 记忆维护 ──
+        # 睡眠压缩
+        try:
+            compressed = compress_memories(self)
+            if compressed > 0:
+                print(f"  [NREM·压缩] 压缩了 {compressed} 条旧记忆", file=sys.stderr)
+        except Exception:
+            pass
+
+        # 主动遗忘
+        try:
+            forgotten = self.memory.forget_low_priority()
+            if forgotten > 0:
+                print(f"  [NREM·遗忘] 遗忘了 {forgotten} 条低优先级记忆", file=sys.stderr)
+        except Exception:
+            pass
+
+        # 记忆异常检测
+        if self._anomaly_enabled:
+            try:
+                anomaly_cfg = self._module_config.get("anomaly", {})
+                scan = detect_anomalies(
+                    self.memory,
+                    recent_count=anomaly_cfg.get("scan_count", 50),
+                    emotion_threshold=anomaly_cfg.get("emotion_threshold", 0.6),
+                )
+                if scan.flagged > 0:
+                    print(f"  [NREM·异常] 发现 {scan.flagged} 条特征记忆 "
+                          f"(高情感:{scan.high_emotion} 突变:{scan.pattern_shift} "
+                          f"罕见:{scan.rare_topic})", file=sys.stderr)
+            except Exception:
+                pass
+
+        # ── REM 阶段: 深度反思 ──
         # 锚点反思 + 模式结晶
         try:
             recent = [m.content[:200] for m in self.memory.list_active(limit=20)]
@@ -292,8 +350,7 @@ class Echo:
                 self.anchors, recent, self.llm,
             )
             if updated > 0:
-                import sys
-                print(f"  [反思] 更新了 {updated} 个自我认知锚点", file=sys.stderr)
+                print(f"  [REM·反思] 更新了 {updated} 个自我认知锚点", file=sys.stderr)
             # 模式结晶
             pattern = self.crystallizer.crystalize_patterns(recent, self.llm)
             if pattern:
@@ -307,7 +364,7 @@ class Echo:
                 pattern_mem.compute_priority()
                 self.memory.insert(pattern_mem)
                 import sys
-                print(f"  [模式] 发现新模式: {pattern[:80]}...", file=sys.stderr)
+                print(f"  [REM·模式] 发现新模式: {pattern[:80]}...", file=sys.stderr)
             # 更新自我画像
             if self.anchors.list_formed():
                 self._self_portrait = self.crystallizer.generate_self_portrait(
@@ -331,41 +388,6 @@ class Echo:
             if explored > 0:
                 import sys
                 print(f"  [探索] 自主搜索学到了 {explored} 条知识", file=sys.stderr)
-        except Exception:
-            pass
-
-        # 记忆异常检测
-        if self._anomaly_enabled:
-            try:
-                anomaly_cfg = self._module_config.get("anomaly", {})
-                scan = detect_anomalies(
-                    self.memory,
-                    recent_count=anomaly_cfg.get("scan_count", 50),
-                    emotion_threshold=anomaly_cfg.get("emotion_threshold", 0.6),
-                )
-                if scan.flagged > 0:
-                    import sys
-                    print(f"  [异常] 发现 {scan.flagged} 条特征记忆 "
-                          f"(高情感:{scan.high_emotion} 突变:{scan.pattern_shift} "
-                          f"罕见:{scan.rare_topic})", file=sys.stderr)
-            except Exception:
-                pass
-
-        # 睡眠压缩
-        try:
-            compressed = compress_memories(self)
-            if compressed > 0:
-                import sys
-                print(f"  [压缩] 压缩了 {compressed} 条旧记忆", file=sys.stderr)
-        except Exception:
-            pass
-
-        # 主动遗忘
-        try:
-            forgotten = self.memory.forget_low_priority()
-            if forgotten > 0:
-                import sys
-                print(f"  [遗忘] 遗忘了 {forgotten} 条低优先级记忆", file=sys.stderr)
         except Exception:
             pass
 
@@ -455,6 +477,14 @@ class Echo:
         # 10. 总线 tick：各模块执行维护
         if self._bus:
             self._bus.tick_all()
+
+        # 11. 关系模型更新
+        if self.relationships:
+            rel = self.relationships.get("default")
+            rel.record_interaction(
+                user_valence=self.emotion.valence,
+                respect_boundaries=True,
+            )
 
         # 11. 身体 tick（Phase 二）
         if self._body_enabled and self.body:
@@ -1218,6 +1248,7 @@ class Echo:
           - 情感唤醒度偏移: 高唤醒 → 更随机 (+0.1)
           - 记忆活跃度偏移: 记忆多 → 更稳定 (-0.05)
           - 情绪调制器偏移（Limbic System → language_temperature_bias）
+          - 人格调制（Big Five → openness/conscientiousness）
           - 随机抖动: ±0.03
         """
         t = self.BASE_TEMPERATURE
@@ -1233,6 +1264,10 @@ class Echo:
         # 情绪调制器额外偏移（Limbic System 硬化）
         if self._module_params:
             t += self._module_params.language_temperature_bias
+
+        # 人格调制（Big Five）
+        if self.personality:
+            t = self.personality.modulate_temperature(t)
 
         # 随机微小抖动（产生风格差异的来源之一）
         t += random.uniform(-0.03, 0.03)
@@ -1379,6 +1414,8 @@ class Echo:
                 "tool_risk_tolerance": round(self._module_params.tool_risk_tolerance, 2),
                 "language_temperature_bias": round(self._module_params.language_temperature_bias, 3),
             } if self._module_params else {},
+            "personality": self.personality.stats() if self.personality else {},
+            "relationship": self.relationships.get("default").to_dict() if self.relationships else {},
         }
 
     def inject_memory(self, content: str, tags: list[str] | None = None) -> str:
