@@ -36,3 +36,7 @@ Thumbs.db
 *.db-shm
 *.db-journal
 *.db-wal
+
+# Excluded from repo
+docs/
+项目设想.txt
