@@ -1,4 +1,4 @@
-# 回响计划 · 启动脚本 (PowerShell)
+﻿# 回响计划 · 启动脚本 (PowerShell)
 # 自动启动 llama-server + Echo CLI
 
 # 修复中文乱码

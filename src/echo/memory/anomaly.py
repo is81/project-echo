@@ -122,11 +122,11 @@ def _tag_anomalies(memory_store, memory_ids: list[str]) -> None:
         placeholders = ",".join("?" * len(memory_ids))
         conn.execute(f"""
             UPDATE memories SET
-                tags = CASE
-                    WHEN tags IS NULL OR tags = '[]' THEN '["anomaly"]'
-                    WHEN tags NOT LIKE '%anomaly%'
-                        THEN json_insert(tags, '$[#]', 'anomaly')
-                    ELSE tags
+                tags_json = CASE
+                    WHEN tags_json IS NULL OR tags_json = '[]' THEN '["anomaly"]'
+                    WHEN tags_json NOT LIKE '%anomaly%'
+                        THEN json_insert(tags_json, '$[#]', 'anomaly')
+                    ELSE tags_json
                 END,
                 base_weight = MIN(1.0, base_weight + 0.05),
                 half_life_hours = MIN(672, half_life_hours * 1.5)

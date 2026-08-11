@@ -40,6 +40,42 @@ from ..review.critique import CritiqueEngine
 from ..tools import tool_registry
 from ..tools.builtin import register_builtin_tools
 
+# jieba 可选：中文分词，安装后提升 System 1 检索质量
+try:
+    import jieba
+except ImportError:
+    jieba = None  # type: ignore
+
+
+# ── 中文/英文分词 ──────────────────────────────────
+
+def _tokenize(text: str) -> set[str]:
+    """将文本分词为用于关键词重叠评分的 token 集合.
+
+    - CJK 文本（中日韩）：优先使用 jieba 分词，回退到字符 bigram
+    - 英文/空格分隔文本：保留原有 word split 行为
+    """
+    # 检测是否主要为 CJK 文本
+    cjk_chars = sum(
+        1 for c in text
+        if '一' <= c <= '鿿' or '　' <= c <= '〿'
+    )
+    if cjk_chars > len(text) * 0.3:
+        # 中文模式
+        if jieba is not None:
+            return set(jieba.cut(text))
+        # 回退：字符 bigram + 单字
+        tokens: set[str] = set()
+        chars = [c for c in text if c.strip() and not c.isascii()]
+        for c in chars:
+            tokens.add(c)
+        for i in range(len(chars) - 1):
+            tokens.add(chars[i] + chars[i + 1])
+        return tokens
+    else:
+        # 英文/空格分隔模式
+        return set(text.lower().split())
+
 
 @dataclass
 class EmotionalState:
@@ -192,13 +228,15 @@ class Echo:
 
     def wake(self, db_path: str = "echo_memory.db") -> "Echo":
         """唤醒 Echo: 打开记忆、载入锚点、预加载核心记忆、初始化意识流."""
-        self.memory = MemoryStore(db_path)
-        self.memory.open()
-
-        # 载入配置
+        # 载入配置（需在 MemoryStore 之前，以便传入记忆参数）
         self._birth_inscription = load_birth_inscription()
         self._principles = load_principles()
         self._module_config = load_module_config()
+
+        # 传入 modules.yaml 中的 memory 配置
+        memory_cfg = self._module_config.get("memory", {})
+        self.memory = MemoryStore(db_path, memory_config=memory_cfg)
+        self.memory.open()
 
         # 应用模块配置
         review_cfg = self._module_config.get("review", {})
@@ -245,6 +283,10 @@ class Echo:
                 mode=self._critique_mode,
             )
 
+        # 初始化认知总线（在所有模块注册之前）
+        if self._bus is None:
+            self._bus = ModuleBus()
+
         # 初始化人格引擎
         if self.personality is None:
             self.personality = PersonalityEngine(BigFive())
@@ -284,8 +326,7 @@ class Echo:
                 available_tools=tool_schemas,
             )
 
-        # 初始化认知总线 + 注册所有模块
-        self._bus = ModuleBus()
+        # 注册剩余模块到认知总线
         self._bus.register("linguistic", self.llm, category="cognitive")
         self._bus.register("memory", self.memory, category="cognitive")
         self._bus.register("tools", tool_registry, category="cognitive")
@@ -458,7 +499,7 @@ class Echo:
         # 1. 应用记忆衰减
         hours_since_start = (now - self._session_start) / 3600.0
         if hours_since_start > 0.01:
-            self.memory.apply_decay(hours_since_start)
+            self.memory.apply_half_life(hours_since_start)
             self._session_start = now
 
         # 2. 情感自然回归
@@ -817,32 +858,63 @@ class Echo:
             if mem.id not in {r.id for r in results}:
                 results.append(mem)
 
-        # 关键词评分
-        query_words = set(query.lower().split())
+        # 关键词评分（中文用 bigram/jieba 分词，英文用空格分词）
+        query_tokens = _tokenize(query)
         scored = []
         for mem in results:
-            mem_words = set(mem.content.lower().split())
-            overlap = len(query_words & mem_words)
+            mem_tokens = _tokenize(mem.content)
+            overlap = len(query_tokens & mem_tokens)
             score = overlap * 0.1 + mem.base_weight
             scored.append((score, mem))
         scored.sort(key=lambda x: x[0], reverse=True)
         candidates = [mem for _, mem in scored[:20]]
 
+        # ── 系统1.5: 嵌入向量相似度提升（可选） ──
+        emb_boosted = False
+        if hasattr(self.llm, "embed"):
+            try:
+                query_emb = self.llm.embed(query)
+                if query_emb:
+                    sim_results = self.memory.search_by_similarity(
+                        query_emb, limit=limit * 2,
+                    )
+                    sim_ids = {m.id for m, _ in sim_results}
+                    # 提升已有候选中的嵌入匹配项
+                    for i, (s, mem) in enumerate(scored):
+                        if mem.id in sim_ids:
+                            scored[i] = (s + 0.3, mem)
+                    # 加入嵌入匹配但不在关键词候选中的记忆
+                    existing_ids = {m.id for _, m in scored}
+                    for mem, sim in sim_results:
+                        if mem.id not in existing_ids:
+                            scored.append((sim * 0.5 + mem.base_weight * 0.5, mem))
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    candidates = [mem for _, mem in scored[:20]]
+                    emb_boosted = True
+            except Exception:
+                pass  # 嵌入不可用，静默回退
+
         # ── 系统2: LLM 语义重排 ──
+        # 如果嵌入已提供高置信度匹配（top score >= 0.8），跳过 LLM 重排
+        top_score = scored[0][0] if scored else 0
         if len(candidates) > 5 and self.llm and self.llm.status.get("active_model"):
+            if emb_boosted and top_score >= 0.8:
+                # 嵌入高分 → 直接返回，节省 LLM 调用延迟
+                result = candidates[:limit]
+                self.memory.batch_record_access([m.id for m in result])
+                return result
             try:
                 reranked = self._semantic_rerank(query, candidates, top_k=limit)
                 if reranked:
-                    for mem in reranked:
-                        self.memory.record_access(mem.id)
+                    self.memory.batch_record_access([m.id for m in reranked])
                     return reranked[:limit]
             except Exception:
                 pass  # 静默回退到系统1
 
         # 回退: 记录访问后返回系统1结果
-        for _, mem in scored[:limit]:
-            self.memory.record_access(mem.id)
-        return candidates[:limit]
+        result = candidates[:limit]
+        self.memory.batch_record_access([m.id for m in result])
+        return result
 
     def _semantic_rerank(
         self, query: str, candidates: list[Memory], top_k: int = 5,
@@ -1249,7 +1321,10 @@ class Echo:
 
     # --- 系统提示构建 ---
 
-    def _build_system_prompt(self, memories: list[Memory]) -> str:
+    def _build_system_prompt(
+        self, memories: list[Memory],
+        procedural: list[Memory] | None = None,
+    ) -> str:
         """构建精简系统提示."""
         # 记忆（最多3条，每条最多120字）
         mem_parts = []
@@ -1262,8 +1337,9 @@ class Echo:
                       if not any(m.id == rm.id for rm in memories)]
         core_text = " | ".join(f"[{m.content[:80]}]" for m in core_items)
 
-        # 程序性记忆（用户偏好，最多3条）
-        procedural = self.memory.list_by_source("procedural", limit=3)
+        # 程序性记忆（用户偏好，最多3条）——可预取传入避免额外查询
+        if procedural is None:
+            procedural = self.memory.list_by_source("procedural", limit=3)
         proc_text = "；".join(m.content[:80] for m in procedural) if procedural else ""
 
         # 已形成的锚点（最多5条，精简）

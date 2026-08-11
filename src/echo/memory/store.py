@@ -30,13 +30,62 @@ except ImportError:
     _NUMPY_AVAILABLE = False
 
 
+# ── 轻量 TTL 缓存 ──────────────────────────────────
+
+class _TTLCache:
+    """简单 TTL 缓存：用于减少高频 SQL 查询的往返."""
+
+    def __init__(self, ttl_seconds: float = 5.0):
+        self._ttl = ttl_seconds
+        self._store: dict[str, tuple[float, object]] = {}
+
+    def get(self, key: str):
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        ts, value = entry
+        if time.time() - ts > self._ttl:
+            del self._store[key]
+            return None
+        return value
+
+    def set(self, key: str, value: object) -> None:
+        self._store[key] = (time.time(), value)
+
+    def invalidate(self, prefix: str = "") -> None:
+        """使匹配前缀的条目失效."""
+        if prefix:
+            keys = [k for k in self._store if k.startswith(prefix)]
+        else:
+            keys = list(self._store.keys())
+        for k in keys:
+            del self._store[k]
+
+
 class MemoryStore:
     """基于 SQLite + sqlite-vec 的记忆存储."""
 
-    def __init__(self, db_path: str | Path = "echo_memory.db"):
+    def __init__(
+        self,
+        db_path: str | Path = "echo_memory.db",
+        memory_config: dict | None = None,
+    ):
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
         self._vec_available: bool = False
+        self._cache = _TTLCache(ttl_seconds=5.0)
+        self._apply_config(memory_config or {})
+
+    def _apply_config(self, cfg: dict) -> None:
+        """应用 modules.yaml 中的记忆配置，缺失项回退到模型常量."""
+        self.half_life_default = cfg.get(
+            "half_life_default_hours", DEFAULT_HALF_LIFE_HOURS,
+        )
+        self.half_life_high_arousal = cfg.get(
+            "half_life_high_arousal_hours", HIGH_AROUSAL_HALF_LIFE_HOURS,
+        )
+        self.forget_threshold = cfg.get("forget_threshold", FORGET_THRESHOLD)
+        self.access_boost = cfg.get("access_boost", ACCESS_BOOST)
 
     # --- 生命周期 ---
 
@@ -74,24 +123,34 @@ class MemoryStore:
                 source TEXT DEFAULT 'interaction'
             )
         """)
-        # 基础索引（只涉及建表时就存在的列）
-        for idx in [
-            "CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source)",
-            "CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories(archived)",
-        ]:
-            self._conn.execute(idx)
         self._conn.commit()
 
     def _create_indexes(self) -> None:
-        """在迁移后创建索引，确保所有列都已存在."""
-        for idx in [
-            "CREATE INDEX IF NOT EXISTS idx_memories_forgotten ON memories(forgotten)",
-            "CREATE INDEX IF NOT EXISTS idx_memories_priority ON memories(priority_score DESC)",
-        ]:
+        """在迁移后创建复合索引，覆盖主要检索模式."""
+        indexes = [
+            # 复合索引：覆盖 list_active / get_core_memories / forget_low_priority
+            # 所有过滤 archived=0 AND forgotten=0 并按 priority_score 排序的查询
+            "CREATE INDEX IF NOT EXISTS idx_memories_active_priority "
+            "ON memories(archived, forgotten, priority_score DESC)",
+
+            # 部分索引：仅活跃记忆，进一步缩小索引体积
+            "CREATE INDEX IF NOT EXISTS idx_memories_active_partial "
+            "ON memories(priority_score DESC) "
+            "WHERE archived = 0 AND forgotten = 0",
+
+            # 来源 + 活跃过滤：覆盖 list_by_source / get_core_memories
+            "CREATE INDEX IF NOT EXISTS idx_memories_source_active "
+            "ON memories(source, archived, forgotten)",
+
+            # 创建时间索引：覆盖 get_old_details 按时间排序过滤
+            "CREATE INDEX IF NOT EXISTS idx_memories_created_at "
+            "ON memories(created_at)",
+        ]
+        for idx in indexes:
             try:
                 self._conn.execute(idx)
             except sqlite3.OperationalError:
-                pass  # 列可能还不存在（极端情况）
+                pass  # 列可能还不存在（极端旧库）
         self._conn.commit()
 
     def _migrate_schema(self) -> None:
@@ -168,6 +227,7 @@ class MemoryStore:
             )
 
         self._conn.commit()
+        self._invalidate_caches()
         return memory.id
 
     def bulk_insert(self, memories: list[Memory]) -> int:
@@ -216,6 +276,7 @@ class MemoryStore:
                     pass  # content_hash 冲突，跳过
 
             self._conn.commit()
+            self._invalidate_caches()
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
@@ -227,10 +288,15 @@ class MemoryStore:
         return self._row_to_memory(row) if row else None
 
     def get_birth(self) -> Optional[Memory]:
+        cached = self._cache.get("birth")
+        if cached is not None:
+            return cached
         row = self._conn.execute(
             "SELECT * FROM memories WHERE source = 'birth' LIMIT 1"
         ).fetchone()
-        return self._row_to_memory(row) if row else None
+        result = self._row_to_memory(row) if row else None
+        self._cache.set("birth", result)
+        return result
 
     def list_active(self, limit: int = 100) -> list[Memory]:
         """列出活跃（未归档、未遗忘）记忆，按优先级降序."""
@@ -246,6 +312,10 @@ class MemoryStore:
 
     def get_core_memories(self, n: int = 5) -> list[Memory]:
         """获取核心记忆（高优先级，非出生/摘要），用于预加载."""
+        key = f"core_{n}"
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
         rows = self._conn.execute(
             """
             SELECT * FROM memories
@@ -255,7 +325,9 @@ class MemoryStore:
             LIMIT ?
             """, (n,),
         ).fetchall()
-        return [self._row_to_memory(r) for r in rows]
+        result = [self._row_to_memory(r) for r in rows]
+        self._cache.set(key, result)
+        return result
 
     def get_old_details(self, age_hours: float = 24, max_weight: float = 0.3) -> list[Memory]:
         """查找旧细节记忆（用于睡眠压缩）.
@@ -277,10 +349,10 @@ class MemoryStore:
         return [self._row_to_memory(r) for r in rows]
 
     def record_access(self, memory_id: str, timestamp: Optional[float] = None) -> None:
-        """记录一次检索命中：+access_count, +weight boost, 刷新时间."""
+        """记录一次检索命中：+access_count, +weight boost, 重算优先级（单条SQL）."""
         ts = timestamp or time.time()
         self._conn.execute(
-            """
+            f"""
             UPDATE memories
             SET last_accessed = ?,
                 access_count = access_count + 1,
@@ -289,13 +361,53 @@ class MemoryStore:
                     WHEN access_count > 3
                     THEN MIN(672.0, half_life_hours * 1.02)
                     ELSE half_life_hours
-                END
+                END,
+                priority_score = base_weight
+                    * (1.0 + log(max(1, 1 + access_count + 1)) * 0.1)
+                    * (1.0 + abs(emotional_valence) * 0.3 + emotional_arousal * 0.2)
+                    * CASE
+                        WHEN half_life_hours <= 0 THEN 1.0
+                        ELSE POW(0.5, ({ts} - last_accessed) / 3600.0 / half_life_hours)
+                      END
             WHERE id = ?
-            """, (ts, ACCESS_BOOST, memory_id),
+            """,
+            (ts, self.access_boost, memory_id),
         )
         self._conn.commit()
-        # 更新后重算优先级
-        self._recalc_priority(memory_id)
+        self._invalidate_caches()
+
+    def batch_record_access(
+        self, memory_ids: list[str], timestamp: Optional[float] = None,
+    ) -> None:
+        """批量记录检索命中：单条 SQL 更新所有记忆的访问统计和优先级."""
+        if not memory_ids:
+            return
+        ts = timestamp or time.time()
+        placeholders = ",".join("?" * len(memory_ids))
+        self._conn.execute(
+            f"""
+            UPDATE memories
+            SET last_accessed = ?,
+                access_count = access_count + 1,
+                base_weight = MIN(1.0, base_weight + ?),
+                half_life_hours = CASE
+                    WHEN access_count > 3
+                    THEN MIN(672.0, half_life_hours * 1.02)
+                    ELSE half_life_hours
+                END,
+                priority_score = base_weight
+                    * (1.0 + log(max(1, 1 + access_count + 1)) * 0.1)
+                    * (1.0 + abs(emotional_valence) * 0.3 + emotional_arousal * 0.2)
+                    * CASE
+                        WHEN half_life_hours <= 0 THEN 1.0
+                        ELSE POW(0.5, ({ts} - last_accessed) / 3600.0 / half_life_hours)
+                      END
+            WHERE id IN ({placeholders})
+            """,
+            (ts, self.access_boost, *memory_ids),
+        )
+        self._conn.commit()
+        self._invalidate_caches()
 
     # ── 半衰期衰减 ──────────────────────────────────
 
@@ -319,12 +431,13 @@ class MemoryStore:
             WHERE source != 'birth' AND archived = 0 AND half_life_hours > 0
             """, (
                 hours_elapsed,
-                HIGH_AROUSAL_THRESHOLD, HIGH_AROUSAL_HALF_LIFE_HOURS,
-                DEFAULT_HALF_LIFE_HOURS,
+                HIGH_AROUSAL_THRESHOLD, self.half_life_high_arousal,
+                self.half_life_default,
             ),
         )
         affected = self._conn.total_changes
         self._conn.commit()
+        self._invalidate_caches()
 
         # 批量重算优先级
         self._recalc_all_priorities()
@@ -332,7 +445,7 @@ class MemoryStore:
 
     # ── 主动遗忘 ────────────────────────────────────
 
-    def forget_low_priority(self, threshold: float = FORGET_THRESHOLD) -> int:
+    def forget_low_priority(self, threshold: float | None = None) -> int:
         """将优先级低于阈值的记忆标记为遗忘.
 
         Birth 和 archived 记忆不受影响。
@@ -340,6 +453,8 @@ class MemoryStore:
         Returns:
             被遗忘的记忆数
         """
+        if threshold is None:
+            threshold = self.forget_threshold
         self._conn.execute(
             """
             UPDATE memories
@@ -350,6 +465,7 @@ class MemoryStore:
         )
         count = self._conn.total_changes
         self._conn.commit()
+        self._invalidate_caches()
         return count
 
     # ── 归档 ────────────────────────────────────────
@@ -364,17 +480,24 @@ class MemoryStore:
             """, (memory_id,),
         )
         self._conn.commit()
+        self._invalidate_caches()
 
     # ── 计数 ────────────────────────────────────────
 
     def count(self, include_forgotten: bool = False) -> int:
+        key = f"count_{include_forgotten}"
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
         if include_forgotten:
             row = self._conn.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()
         else:
             row = self._conn.execute(
                 "SELECT COUNT(*) as cnt FROM memories WHERE forgotten = 0"
             ).fetchone()
-        return row["cnt"]
+        result = row["cnt"]
+        self._cache.set(key, result)
+        return result
 
     # ── 搜索 ────────────────────────────────────────
 
@@ -391,22 +514,30 @@ class MemoryStore:
         return [self._row_to_memory(r) for r in rows]
 
     def search_by_tags(self, tags: list[str], limit: int = 20) -> list[Memory]:
+        """按标签搜索记忆，使用 SQLite JSON1 在 SQL 层过滤.
+
+        使用 json_each 遍历 tags_json 数组，无需 Python 侧反序列化 500 行。
+        """
+        conditions = []
+        params: list = []
+        for tag in tags:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value = ?)"
+            )
+            params.append(tag)
+        where_clause = " OR ".join(conditions)
+        params.append(limit)
         rows = self._conn.execute(
-            """
+            f"""
             SELECT * FROM memories
             WHERE archived = 0 AND forgotten = 0
+              AND ({where_clause})
             ORDER BY priority_score DESC
-            LIMIT 500
-            """
+            LIMIT ?
+            """,
+            params,
         ).fetchall()
-        results = []
-        for row in rows:
-            mem_tags = json.loads(row["tags_json"])
-            if any(t in mem_tags for t in tags):
-                results.append(self._row_to_memory(row))
-                if len(results) >= limit:
-                    break
-        return results
+        return [self._row_to_memory(r) for r in rows]
 
     def search_by_similarity(
         self, query_embedding: list[float], limit: int = 10
@@ -456,6 +587,14 @@ class MemoryStore:
         scored.sort(key=lambda x: x[1], reverse=True)
         return [(self._row_to_memory(r), s) for s, _, r in scored[:limit]]
 
+    # ── 缓存 ────────────────────────────────────────
+
+    def _invalidate_caches(self) -> None:
+        """在数据变更后失效受影响的缓存."""
+        self._cache.invalidate("core_")
+        self._cache.invalidate("count_")
+        # birth 缓存不失效（birth 在 wake 后不再改变）
+
     # ── 内部 ────────────────────────────────────────
 
     def _recalc_priority(self, memory_id: str) -> None:
@@ -474,7 +613,7 @@ class MemoryStore:
         self._conn.commit()
 
     def _recalc_all_priorities(self) -> None:
-        """批量重算所有非 birth 记忆的优先级评分.
+        """批量重算所有非 birth 记忆的优先级评分（跳过变化 < 0.001 的行）.
 
         P = base_weight * (1 + log(1+access)*0.1) * (1+|valence|*0.3+arousal*0.2) * 0.5^(age/halflife)
         """
@@ -482,14 +621,21 @@ class MemoryStore:
         self._conn.execute(
             f"""
             UPDATE memories
-            SET priority_score = base_weight
-                * (1.0 + log(max(1, 1 + access_count)) * 0.1)
-                * (1.0 + abs(emotional_valence) * 0.3 + emotional_arousal * 0.2)
-                * CASE
-                    WHEN half_life_hours <= 0 THEN 1.0
-                    ELSE POW(0.5, ({now} - last_accessed) / 3600.0 / half_life_hours)
-                  END
-            WHERE source != 'birth'
+            SET priority_score = calc.new_priority
+            FROM (
+                SELECT id,
+                    base_weight
+                    * (1.0 + log(max(1, 1 + access_count)) * 0.1)
+                    * (1.0 + abs(emotional_valence) * 0.3 + emotional_arousal * 0.2)
+                    * CASE
+                        WHEN half_life_hours <= 0 THEN 1.0
+                        ELSE POW(0.5, ({now} - last_accessed) / 3600.0 / half_life_hours)
+                      END AS new_priority
+                FROM memories
+                WHERE source != 'birth'
+            ) AS calc
+            WHERE memories.id = calc.id
+              AND ABS(memories.priority_score - calc.new_priority) > 0.001
             """
         )
         self._conn.commit()
