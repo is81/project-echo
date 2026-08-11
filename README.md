@@ -4,7 +4,7 @@
 > *An interactive entity with deep memory, personality evolution, and narrative sense.*
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-112%20passed-green.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-131%20passed-green.svg)](tests/)
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)]()
 
 ---
@@ -85,7 +85,15 @@ Project Echo/
 │   │   ├── models.py                # Memory 数据模型（三因素加权 + 半衰期衰减）
 │   │   ├── store.py                 # SQLite + sqlite-vec 向量存储
 │   │   ├── priority.py              # 批量评分引擎
-│   │   └── summarizer.py            # 睡眠期记忆压缩（LLM 摘要）
+│   │   ├── summarizer.py            # 睡眠期记忆压缩（LLM 摘要）
+│   │   ├── anomaly.py               # 异常检测（高情感/情绪突变/罕见话题）
+│   │   ├── trauma.py                # 创伤印记系统（威胁阈值 + 触发衰减）
+│   │   └── graph_store.py           # 概念图谱（内存图 + BFS 路径搜索）
+│   ├── personality/
+│   │   └── traits.py                # 大五人格模型 + 人格演化引擎
+│   ├── social/
+│   │   ├── relationship.py          # 关系模型（信任/亲密/衰减）
+│   │   └── theory_of_mind.py        # 心理理论（ToM 推测 + NREM 反思）
 │   ├── review/                      # ★ 审查模块（Phase 1）
 │   │   ├── critique.py              #   CritiqueEngine + CritiqueResult
 │   │   └── dimensions.py            #   6 个审查维度（原则/诚实/情绪/自指/简洁/空洞）
@@ -105,7 +113,7 @@ Project Echo/
 │   ├── zim_ingest.py                # ZIM→记忆导入管道（话题筛选 + 去重）
 │   ├── cli.py                       # Rich CLI（聊天/探索/ZIM导入模式）
 │   └── config.py                    # 全局配置加载
-├── tests/                           # 112 个测试
+├── tests/                           # 131 个测试
 ├── start.ps1                        # 一键启动脚本
 └── LICENSE                          # MIT
 ```
@@ -170,7 +178,7 @@ python -m echo.cli --db my_memory.db
 
 ```bash
 pip install -e .                    # 安装（开发模式）
-python -m pytest tests/ -v          # 运行 112 个测试
+python -m pytest tests/ -v          # 运行 131 个测试
 ```
 
 ---
@@ -189,7 +197,7 @@ python -m pytest tests/ -v          # 运行 112 个测试
 | 🔗 认知总线 | 8 模块注册 + 信号路由 + 生命周期管理 | `bus.py` |
 | 🌙 睡眠期记忆整理 | 6 步独立维护（try/except 隔离） | `core.py` `sleep()` |
 | 🍃 优雅降级链 | 多后端优先级 + feature flag + 纯 Python fallback | `backend.py` + `store.py` |
-| 🔍 双系统检索 | System 1 快速关键词 + System 2 LLM 重排 | `core.py` `_retrieve_memories()` |
+| 🔍 三系统检索 | System 1 中文分词关键词 + System 1.5 嵌入向量 + System 2 LLM 重排 | `core.py` `_retrieve_memories()` |
 | ⚓ 锚点自模型 | 18 个预定义问题，答案在经验中演化 | `anchors.py` + `crystallize.py` |
 | 🔁 内容哈希幂等导入 | SHA256 + UNIQUE INDEX + INSERT OR IGNORE | `store.py` `bulk_insert()` |
 
@@ -201,10 +209,10 @@ python -m pytest tests/ -v          # 运行 112 个测试
 - **模型**：Gemma 4 12B QAT (Q4_K_XL) via llama-server（`--reasoning off`）
 - **存储**：SQLite + sqlite-vec（可选，向量记忆搜索）
 - **架构**：六模块协同认知总线（审查 + 规划 + 情绪调制 + 信号路由）
-- **记忆模型**：三因素加权（访问频率 × 情感强度 × 指数衰减 × 摘要吸收归档）
+- **记忆模型**：三因素加权（访问频率 × 情感强度 × 指数衰减 × 摘要吸收归档）+ 中文分词检索 + 嵌入向量提升
 - **情感模型**：二维 circumplex（valence [-1,1] × arousal [0,1]），启发式更新 + 自然回归 + 跨模块调制
-- **温度**：动态计算（base 0.8 + arousal×0.1 - 记忆多时-0.05 + 情绪调制偏移 ± 随机抖动 0.03）
-- **测试**：112 passed，零破坏
+- **温度**：动态计算（base 0.8 + arousal×0.1 + 人格偏移 + 情绪调制偏移 - 记忆多时-0.05 ± 随机抖动 0.03）
+- **测试**：131 passed，零破坏
 
 ---
 
